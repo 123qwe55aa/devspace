@@ -778,7 +778,7 @@ function createMcpServer(
       server,
       toolNames.grep,
       {
-        title: "Grep files",
+        title: config.toolNaming === "short" ? "Grep" : "Grep files",
         description:
           "Search file contents inside an open workspace. Use this before broad reads when looking for symbols, text, or usage sites. Respects project ignore rules. Call open_workspace first and pass workspaceId.",
         inputSchema: {
@@ -858,7 +858,7 @@ function createMcpServer(
       server,
       toolNames.glob,
       {
-        title: "Find files",
+        title: config.toolNaming === "short" ? "Glob" : "Find files",
         description:
           "Find files by glob pattern inside an open workspace. Use this to discover filenames or narrow file sets before reading. Respects project ignore rules. Call open_workspace first and pass workspaceId.",
         inputSchema: {
@@ -935,7 +935,7 @@ function createMcpServer(
       server,
       toolNames.ls,
       {
-        title: "List directory",
+        title: config.toolNaming === "short" ? "Ls" : "List directory",
         description:
           "List a directory inside an open workspace. Use this for directory inspection before reading files. Call open_workspace first and pass workspaceId.",
         inputSchema: {

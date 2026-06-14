@@ -6,7 +6,7 @@ DevSpace connects MCP-capable hosts such as ChatGPT or Claude to a local
 development machine. The host calls MCP tools directly; work is not delegated to
 a separate local agent loop.
 
-## Current Tools
+## Tool Naming Modes
 
 Default tool naming is controlled by `DEVSPACE_TOOL_NAMING`.
 
