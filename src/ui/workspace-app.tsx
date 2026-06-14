@@ -31,7 +31,6 @@ interface ToolResultCard {
   resultId: string;
   workspaceId?: string;
   path?: string;
-  label?: string;
   root?: string;
   status?: string;
   summary?: Record<string, unknown>;
@@ -324,7 +323,7 @@ function ToolPayloadView({
   if (card.tool === "read_file") {
     return (
       <FilePayload
-        path={card.path ?? card.label ?? "file"}
+        path={card.path ?? "file"}
         text={text}
         startLine={summaryNumber(card.summary, "offset") ?? 1}
         fileOptions={fileOptions}
@@ -431,7 +430,7 @@ function getToolDisplay(card: ToolResultCard): {
   label: string;
   tone: string;
 } {
-  const label = card.label ?? card.path ?? card.root ?? card.tool;
+  const label = getToolLabel(card);
 
   switch (card.tool) {
     case "open_workspace":
@@ -451,6 +450,17 @@ function getToolDisplay(card: ToolResultCard): {
     case "run_shell":
       return { icon: <TerminalIcon />, title: "Run Shell", label, tone: "shell" };
   }
+}
+
+function getToolLabel(card: ToolResultCard): string {
+  if (card.path) return card.path;
+  if (card.root) return card.root;
+  if (card.tool === "run_shell") return String(card.summary?.command ?? card.tool);
+  if (card.tool === "grep_files" || card.tool === "find_files") {
+    return String(card.summary?.pattern ?? card.tool);
+  }
+
+  return card.tool;
 }
 
 function IconSvg({

@@ -99,7 +99,6 @@ function cardOutputSchema<TTool extends string>(
     resultId: z.string(),
     workspaceId: z.string(),
     path: z.string().optional(),
-    label: z.string(),
     summary,
     result: z
       .string()
@@ -399,7 +398,6 @@ function createMcpServer(
         resultId: z.string(),
         workspaceId: z.string(),
         root: z.string(),
-        label: z.string(),
         summary: z.object({
           agentsFiles: z.number().int().nonnegative(),
         }),
@@ -470,7 +468,6 @@ function createMcpServer(
           resultId: storedResult.id,
           workspaceId: workspace.id,
           root: workspace.root,
-          label: workspace.root,
           summary,
           result: contentText(resultContent),
           ui: {
@@ -562,7 +559,6 @@ function createMcpServer(
           resultId: storedResult.id,
           workspaceId,
           path: input.path,
-          label: input.path,
           summary,
           result: contentText(response.content),
           ui: {
@@ -648,7 +644,6 @@ function createMcpServer(
           resultId: storedResult.id,
           workspaceId,
           path: input.path,
-          label: input.path,
           summary,
           result: contentText(response.content),
           ui: {
@@ -752,7 +747,6 @@ function createMcpServer(
           workspaceId,
           status: "applied",
           path: input.path,
-          label: input.path,
           summary: storedResult.summary,
           result: contentText(editContent),
           ui: {
@@ -840,7 +834,6 @@ function createMcpServer(
             resultId: storedResult.id,
             workspaceId,
             path: input.path,
-            label: input.pattern,
             summary,
             result: contentText(response.content),
             ui: {
@@ -924,7 +917,6 @@ function createMcpServer(
             resultId: storedResult.id,
             workspaceId,
             path: input.path,
-            label: input.pattern,
             summary,
             result: contentText(response.content),
             ui: {
@@ -1000,7 +992,6 @@ function createMcpServer(
             resultId: storedResult.id,
             workspaceId,
             path: input.path,
-            label: input.path,
             summary,
             result: contentText(response.content),
             ui: {
@@ -1099,7 +1090,6 @@ function createMcpServer(
           resultId: storedResult.id,
           workspaceId,
           path: workingDirectory,
-          label: input.command,
           summary,
           result: contentText(response.content),
           ui: {
