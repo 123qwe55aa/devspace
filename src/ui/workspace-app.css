@@ -192,6 +192,115 @@ body {
   background: var(--color-background-primary, #18191d);
 }
 
+.review-header {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px 8px 14px;
+}
+
+.review-title-group {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.review-summary {
+  display: grid;
+  border-top: 1px solid var(--color-border-primary, #3a3a40);
+  background: var(--color-background-primary, #18191d);
+}
+
+.review-actions,
+.review-diff-file-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-empty {
+  color: var(--color-text-secondary, #b7b7bf);
+  font-size: var(--font-text-sm-size, 13px);
+}
+
+.review-actions {
+  justify-content: flex-end;
+  padding: 10px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-primary, #3a3a40) 72%, transparent);
+}
+
+.review-action {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--color-border-primary, #3a3a40) 80%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--color-background-primary, #17181c) 36%, transparent);
+  color: var(--color-text-secondary, #d6d6dc);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-text-sm-size, 12px);
+}
+
+.review-action:hover {
+  background: color-mix(in srgb, var(--color-background-tertiary, #333338) 80%, transparent);
+  color: var(--color-text-primary, #f5f5f6);
+}
+
+.review-diff {
+  display: grid;
+  gap: 8px;
+  max-height: 520px;
+  overflow: auto;
+  padding: 0 0 12px;
+}
+
+.review-diff-files {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.review-diff-file {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-border-primary, #3a3a40) 80%, transparent);
+  border-radius: 8px;
+}
+
+.review-diff-file-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  background: color-mix(in srgb, var(--color-background-secondary, #28282d) 88%, transparent);
+  color: var(--color-text-primary, #f5f5f6);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.review-diff-file-header:hover {
+  background: color-mix(in srgb, var(--color-background-tertiary, #333338) 84%, transparent);
+}
+
+.review-diff-file-name,
+.review-diff-file-stats {
+  overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: var(--font-text-sm-size, 12px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-diff-file-stats {
+  justify-content: flex-end;
+  overflow: visible;
+}
+
 .status {
   padding: 12px 14px;
   font-size: var(--font-text-sm-size, 13px);
@@ -234,7 +343,8 @@ body {
   word-break: break-word;
 }
 
-.text-payload.run_shell {
+.text-payload.run_shell,
+.text-payload.bash {
   color: var(--color-text-primary, #f5f5f6);
   background: var(--color-background-primary, #101114);
 }

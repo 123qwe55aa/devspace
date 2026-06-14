@@ -37,6 +37,11 @@ that mode, the server instructs clients to use the shell tool with command-line
 programs such as `grep`, `rg`, `find`, `ls`, and `tree` for search and directory
 inspection.
 
+`DEVSPACE_WIDGETS` controls ChatGPT Apps widget iframe usage. `changes`, the
+default, exposes `review_changes` and only attaches widget UI to `open_workspace`
+and that aggregate review tool. Use `full` to restore legacy per-tool cards for
+debugging without the aggregate review tool, or `off` to disable widget UI entirely.
+
 Server-level workflow guidance is exposed through MCP initialize instructions,
 not a dedicated info tool.
 
@@ -132,6 +137,7 @@ DEVSPACE_SKILLS="1" \
 DEVSPACE_SKILL_PATHS="/home/waishnav/.codex/skills,/home/waishnav/.claude/skills" \
 DEVSPACE_TOOL_MODE="full" \
 DEVSPACE_TOOL_NAMING="legacy" \
+DEVSPACE_WIDGETS="changes" \
 npm run dev
 ```
 

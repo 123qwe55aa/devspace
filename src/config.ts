@@ -4,6 +4,7 @@ import { expandHomePath } from "./roots.js";
 import type { AutoCommitConfig, AutoCommitProviderId } from "./autocommit/types.js";
 
 export type ToolNamingMode = "legacy" | "short";
+export type WidgetMode = "off" | "changes" | "full";
 const DEFAULT_AUTOCOMMIT_MODEL = "gpt-5.3-codex-spark";
 const DEFAULT_AUTOCOMMIT_CODEX_REASONING_EFFORT = "low";
 
@@ -16,6 +17,7 @@ export interface ServerConfig {
   publicBaseUrl: string;
   minimalTools: boolean;
   toolNaming: ToolNamingMode;
+  widgets: WidgetMode;
   stateDir: string;
   worktreeRoot: string;
   skillsEnabled: boolean;
@@ -128,6 +130,13 @@ function parseToolNaming(value: string | undefined): ToolNamingMode {
   throw new Error(`Invalid DEVSPACE_TOOL_NAMING: ${value}`);
 }
 
+function parseWidgetMode(value: string | undefined): WidgetMode {
+  if (!value || value === "changes") return "changes";
+  if (value === "off" || value === "full") return value;
+
+  throw new Error(`Invalid DEVSPACE_WIDGETS: ${value}`);
+}
+
 function defaultStateDir(): string {
   return join(homedir(), ".local", "share", "devspace");
 }
@@ -150,6 +159,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl: env.DEVSPACE_PUBLIC_BASE_URL ?? "https://agent.gitcms.blog",
     minimalTools: parseMinimalTools(env),
     toolNaming: parseToolNaming(env.DEVSPACE_TOOL_NAMING),
+    widgets: parseWidgetMode(env.DEVSPACE_WIDGETS),
     stateDir: resolve(env.DEVSPACE_STATE_DIR ?? defaultStateDir()),
     worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? defaultWorktreeRoot())),
     skillsEnabled: parseBoolean(env.DEVSPACE_SKILLS),

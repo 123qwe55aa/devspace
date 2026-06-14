@@ -1,345 +1,433 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import { createRoot } from "react-dom/client";
-import { FileStream, getFiletypeFromFileName } from "@pierre/diffs";
-import type { FileStreamOptions } from "@pierre/diffs";
-import { PatchDiff } from "@pierre/diffs/react";
 import {
   App,
   applyDocumentTheme,
   applyHostFonts,
   applyHostStyleVariables,
-} from "@modelcontextprotocol/ext-apps/app-with-deps";
+} from "@modelcontextprotocol/ext-apps";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isEditTool,
+  isExpandableCard,
+  isReadTool,
+  isReviewTool,
+  isSearchTool,
+  isShellTool,
+  isToolName,
+  isToolResultCard,
+  isWriteTool,
+  payloadText,
+  summaryNumber,
+  type HostContext,
+  type ToolName,
+  type ToolResultCard,
+} from "./card-types.js";
 import "./workspace-app.css";
 
-type ToolName =
-  | "open_workspace"
-  | "read_file"
-  | "write_file"
-  | "edit_file"
-  | "grep_files"
-  | "find_files"
-  | "list_directory"
-  | "run_shell"
-  | "read"
-  | "write"
-  | "edit"
-  | "grep"
-  | "glob"
-  | "ls"
-  | "bash";
-
-type HostContext = NonNullable<ReturnType<App["getHostContext"]>>;
-
-interface ToolResultCard {
-  tool: ToolName;
-  workspaceId?: string;
-  path?: string;
-  root?: string;
-  status?: string;
-  summary?: Record<string, unknown>;
-  payload?: ToolPayload;
-  agentsFiles?: Array<{
-    path?: string;
-    content?: string;
-  }>;
-  availableAgentsFiles?: Array<{
-    path?: string;
-  }>;
-  skills?: Array<{
-    name?: string;
-    description?: string;
-    path?: string;
-  }>;
-  skillDiagnostics?: unknown[];
-  instruction?: string;
+interface ToolDisplay {
+  icon: string;
+  title: string;
+  label: string;
+  tone: string;
 }
 
-interface ToolContent {
-  type: "text" | "image";
-  text?: string;
-  data?: string;
-  mimeType?: string;
+interface MountedPayload {
+  update(options: {
+    card: ToolResultCard;
+    hostContext?: HostContext;
+    errorMessage?: string | null;
+    visibleFileCount?: number;
+  }): void;
+  unmount(): void;
 }
 
-interface ToolPayload {
-  content?: ToolContent[];
-  diff?: string;
-  patch?: string;
+let app: App | null = null;
+let connected = false;
+let connectionError: string | null = null;
+let hostContext: HostContext | undefined;
+let card: ToolResultCard | null = null;
+let expanded = false;
+let reviewFilesExpanded = false;
+let errorMessage: string | null = null;
+let currentPayload: MountedPayload | null = null;
+let currentPayloadContainer: HTMLElement | null = null;
+
+const maybeAppRoot = document.querySelector<HTMLElement>("#app");
+
+if (!maybeAppRoot) {
+  throw new Error("Missing #app root element.");
 }
 
-function isToolName(value: unknown): value is ToolName {
-  return (
-    value === "open_workspace" ||
-    value === "read_file" ||
-    value === "write_file" ||
-    value === "edit_file" ||
-    value === "grep_files" ||
-    value === "find_files" ||
-    value === "list_directory" ||
-    value === "run_shell" ||
-    value === "read" ||
-    value === "write" ||
-    value === "edit" ||
-    value === "grep" ||
-    value === "glob" ||
-    value === "ls" ||
-    value === "bash"
+const appRoot = maybeAppRoot;
+
+void boot();
+
+async function boot(): Promise<void> {
+  render();
+
+  app = new App(
+    { name: "devspace-tool-cards", version: "0.4.0" },
+    {},
   );
-}
 
-function toolNameFromMeta(result: CallToolResult): ToolName | undefined {
-  const meta = result._meta as Record<string, unknown> | undefined;
-  return isToolName(meta?.tool) ? meta.tool : undefined;
-}
+  app.ontoolresult = (result) => {
+    const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
+    const metaCard = cardFromMeta(result);
+    const structured = metaCard
+      ? { ...structuredContent, ...metaCard }
+      : structuredContent;
+    const tool = toolNameFromMeta(result);
 
-function isReadTool(tool: ToolName): boolean {
-  return tool === "read_file" || tool === "read";
-}
-
-function isWriteTool(tool: ToolName): boolean {
-  return tool === "write_file" || tool === "write";
-}
-
-function isEditTool(tool: ToolName): boolean {
-  return tool === "edit_file" || tool === "edit";
-}
-
-function isSearchTool(tool: ToolName): boolean {
-  return tool === "grep_files" || tool === "find_files" || tool === "grep" || tool === "glob";
-}
-
-function isShellTool(tool: ToolName): boolean {
-  return tool === "run_shell" || tool === "bash";
-}
-
-function cardFromMeta(result: CallToolResult): Partial<ToolResultCard> | undefined {
-  const meta = result._meta as Record<string, unknown> | undefined;
-  const card = meta?.card;
-  return card && typeof card === "object" ? card : undefined;
-}
-
-function isToolResultCard(value: unknown): value is Omit<ToolResultCard, "tool"> {
-  return Boolean(value && typeof value === "object");
-}
-
-function getStructuredContent<T>(result: CallToolResult): T | undefined {
-  return result.structuredContent as T | undefined;
-}
-
-function AppRoot() {
-  const appRef = useRef<App | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [hostContext, setHostContext] = useState<HostContext | undefined>();
-  const [card, setCard] = useState<ToolResultCard | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (appRef.current) return;
-
-    const createdApp = new App(
-      { name: "devspace-tool-cards", version: "0.3.0" },
-      {},
-    );
-    appRef.current = createdApp;
-
-    createdApp.ontoolresult = (result) => {
-      const structuredContent = getStructuredContent<Partial<ToolResultCard>>(result);
-      const metaCard = cardFromMeta(result);
-      const structured = metaCard
-        ? { ...structuredContent, ...metaCard }
-        : structuredContent;
-      const tool = toolNameFromMeta(result);
-      if (!tool || !isToolResultCard(structured)) {
-        setCard(null);
-        setExpanded(false);
-        setErrorMessage("No result card is available for this tool result.");
-        return;
-      }
-
-      setCard({ ...structured, tool });
-      setExpanded(false);
-      setErrorMessage(null);
-    };
-
-    createdApp.onhostcontextchanged = (ctx) => {
-      setHostContext((current: HostContext | undefined) => ({
-        ...current,
-        ...ctx,
-      }));
-    };
-
-    createdApp.onteardown = async () => ({});
-
-    void createdApp
-      .connect()
-      .then(() => {
-        const initialContext = createdApp.getHostContext();
-        if (initialContext) setHostContext(initialContext);
-        setConnected(true);
-      })
-      .catch((connectError: unknown) => {
-        setConnectionError(
-          connectError instanceof Error
-            ? connectError.message
-            : String(connectError),
-        );
-      });
-  }, []);
-
-  useEffect(() => {
-    if (hostContext?.theme) applyDocumentTheme(hostContext.theme);
-    if (hostContext?.styles?.variables) {
-      applyHostStyleVariables(hostContext.styles.variables);
-    }
-    if (hostContext?.styles?.css?.fonts) {
-      applyHostFonts(hostContext.styles.css.fonts);
+    if (!tool || !isToolResultCard(structured)) {
+      card = null;
+      expanded = false;
+      reviewFilesExpanded = false;
+      errorMessage = "No result card is available for this tool result.";
+      render();
+      return;
     }
 
-    const insets = hostContext?.safeAreaInsets;
-    if (!insets) return;
+    card = { ...structured, tool };
+    expanded = false;
+    reviewFilesExpanded = false;
+    errorMessage = null;
+    render();
+  };
 
-    document.body.style.padding = `${insets.top}px ${insets.right}px ${insets.bottom}px ${insets.left}px`;
-  }, [hostContext]);
+  app.onhostcontextchanged = (ctx) => {
+    hostContext = {
+      ...hostContext,
+      ...ctx,
+    };
+    applyHostContext();
+    renderPayloadIfNeeded();
+  };
 
-  const themeType: "light" | "dark" =
-    hostContext?.theme === "light" ? "light" : "dark";
+  app.onteardown = async () => {
+    unmountPayload();
+    return {};
+  };
 
-  const fileOptions = useMemo(
-    () => ({
-      theme: {
-        light: "pierre-light",
-        dark: "pierre-dark",
-      },
-      themeType,
-      overflow: "scroll" as const,
-    }),
-    [themeType],
-  );
+  try {
+    await app.connect();
+    const initialContext = app.getHostContext();
+    if (initialContext) hostContext = initialContext;
+    applyHostContext();
+    connected = true;
+  } catch (connectError) {
+    connectionError = connectError instanceof Error
+      ? connectError.message
+      : String(connectError);
+  }
 
-  const diffOptions = useMemo(
-    () => ({
-      theme: {
-        light: "pierre-light",
-        dark: "pierre-dark",
-      },
-      themeType,
-      diffStyle: "unified" as const,
-      diffIndicators: "bars" as const,
-      hunkSeparators: "line-info" as const,
-      lineDiffType: "word-alt" as const,
-      overflow: "scroll" as const,
-      collapsedContextThreshold: 4,
-      expansionLineCount: 20,
-      stickyHeader: true,
-      disableFileHeader: true,
-    }),
-    [themeType],
-  );
+  render();
+}
 
-  const toggleExpanded = useCallback(() => {
-    setExpanded((nextExpanded) => !nextExpanded);
-  }, []);
+function applyHostContext(): void {
+  if (hostContext?.theme) applyDocumentTheme(hostContext.theme);
+  if (hostContext?.styles?.variables) {
+    applyHostStyleVariables(hostContext.styles.variables);
+  }
+  if (hostContext?.styles?.css?.fonts) {
+    applyHostFonts(hostContext.styles.css.fonts);
+  }
 
-  if (connectionError) return <EmptyState message={connectionError} tone="error" />;
-  if (!connected) return <EmptyState message="Connecting to host..." />;
+  const insets = hostContext?.safeAreaInsets;
+  if (!insets) return;
+
+  document.body.style.padding = `${insets.top}px ${insets.right}px ${insets.bottom}px ${insets.left}px`;
+}
+
+function render(): void {
+  unmountPayload();
+
+  if (connectionError) {
+    renderEmpty(connectionError, "error");
+    return;
+  }
+
+  if (!connected) {
+    renderEmpty("Connecting to host...");
+    return;
+  }
+
   if (!card) {
-    return (
-      <EmptyState
-        message={errorMessage ?? "Waiting for a tool result."}
-        tone={errorMessage ? "error" : "muted"}
-      />
-    );
+    renderEmpty(errorMessage ?? "Waiting for a tool result.", errorMessage ? "error" : "muted");
+    return;
   }
 
   const display = getToolDisplay(card);
+  if (isReviewTool(card.tool)) {
+    renderReviewCard(card, display);
+    return;
+  }
+
   const expandable = isExpandableCard(card);
+  const main = element("main", { className: "shell" });
+  const section = element("section", { className: `tool-card ${display.tone}` });
+  const button = element("button", {
+    className: "tool-header",
+    type: "button",
+    ariaExpanded: String(expanded),
+    disabled: !expandable,
+  });
 
-  return (
-    <main className="shell">
-      <section className={`tool-card ${display.tone}`}>
-        <button
-          className="tool-header"
-          type="button"
-          aria-expanded={expanded}
-          disabled={!expandable}
-          onClick={toggleExpanded}
-        >
-          <span className="tool-icon" aria-hidden="true">
-            {display.icon}
-          </span>
-          <span className="tool-main">
-            <span className="tool-title">{display.title}</span>
-            <span className="tool-label" title={display.label}>
-              {display.label}
-            </span>
-          </span>
-          <SummaryBadges card={card} />
-          <ChevronIcon expanded={expanded} visible={expandable} />
-        </button>
+  if (expandable) {
+    button.addEventListener("click", () => {
+      expanded = !expanded;
+      render();
+    });
+  }
 
-        {expanded ? (
-          <div className="tool-body">
-            <ToolPayloadView
-              card={card}
-              errorMessage={errorMessage}
-              fileOptions={fileOptions}
-              diffOptions={diffOptions}
-            />
-          </div>
-        ) : null}
-      </section>
-    </main>
+  const icon = element("span", { className: "tool-icon", ariaHidden: "true" });
+  icon.innerHTML = display.icon;
+
+  const toolMain = element("span", { className: "tool-main" });
+  const title = element("span", { className: "tool-title", text: display.title });
+  const label = element("span", {
+    className: "tool-label",
+    text: display.label,
+    title: display.label,
+  });
+  toolMain.append(title, label);
+
+  button.append(
+    icon,
+    toolMain,
+    renderSummaryBadge(card),
+    renderChevron(expanded, expandable),
   );
+  section.append(button);
+
+  if (expanded) {
+    const body = element("div", { className: "tool-body" });
+    currentPayloadContainer = body;
+    section.append(body);
+  }
+
+  main.append(section);
+  appRoot.replaceChildren(main);
+  renderPayloadIfNeeded();
 }
 
-function ToolPayloadView({
-  card,
-  errorMessage,
-  fileOptions,
-  diffOptions,
-}: {
-  card: ToolResultCard;
-  errorMessage: string | null;
-  fileOptions: FileStreamOptions;
-  diffOptions: React.ComponentProps<typeof PatchDiff>["options"];
-}) {
+function renderEmpty(message: string, tone: "muted" | "error" = "muted"): void {
+  const main = element("main", { className: "shell" });
+  main.append(element("section", { className: `empty ${tone}`, text: message }));
+  appRoot.replaceChildren(main);
+}
+
+async function renderPayloadIfNeeded(): Promise<void> {
+  if (!card || !currentPayloadContainer || (!expanded && !isReviewTool(card.tool))) return;
+
+  const target = currentPayloadContainer;
+
   if (errorMessage) {
-    return <StatusLine message={errorMessage ?? "Unable to load details."} tone="error" />;
+    renderStatus(target, errorMessage, "error");
+    return;
   }
 
   if (card.tool === "open_workspace") {
-    return <WorkspacePayload card={card} />;
+    renderPrePayload(target, workspacePayloadText(card), "open_workspace");
+    return;
   }
 
-  if (isEditTool(card.tool) || isWriteTool(card.tool)) {
-    const patch = card.payload?.patch || card.payload?.diff;
-    if (!patch) return <StatusLine message="Diff payload is not available." />;
+  if (shouldUseHeavyPayload(card)) {
+    if (currentPayload) {
+      currentPayload.update({ card, hostContext, errorMessage });
+      return;
+    }
 
-    return <DiffPayload patch={patch} diffOptions={diffOptions} />;
+    renderStatus(target, "Loading details...");
+
+    const { mountHeavyPayload } = await import("./heavy-payload.js");
+    if (target !== currentPayloadContainer || !expanded || !card) return;
+
+    currentPayload = mountHeavyPayload(target, {
+      card,
+      hostContext,
+      errorMessage,
+    });
+    return;
+  }
+
+  if (isReviewTool(card.tool)) {
+    const visibleFileCount = reviewFilesExpanded
+      ? undefined
+      : Math.max(3, (card.files ?? []).slice(0, 3).length);
+
+    if (currentPayload) {
+      currentPayload.update({ card, hostContext, errorMessage, visibleFileCount });
+      return;
+    }
+
+    renderStatus(target, "Loading review...");
+
+    const { mountReviewPayload } = await import("./review-payload.js");
+    if (target !== currentPayloadContainer || !card) return;
+
+    currentPayload = mountReviewPayload(target, {
+      card,
+      hostContext,
+      errorMessage,
+      visibleFileCount,
+    });
+    return;
   }
 
   const text = payloadText(card.payload);
-  if (!text) return <StatusLine message="No details available." />;
-
-  if (isReadTool(card.tool)) {
-    return (
-      <FilePayload
-        path={card.path ?? "file"}
-        text={text}
-        startLine={summaryNumber(card.summary, "offset") ?? 1}
-        fileOptions={fileOptions}
-      />
-    );
+  if (!text) {
+    renderStatus(target, "No details available.");
+    return;
   }
 
-  return <pre className={`text-payload ${card.tool}`}>{text}</pre>;
+  renderPrePayload(target, text, card.tool);
 }
 
-function WorkspacePayload({ card }: { card: ToolResultCard }) {
+function shouldUseHeavyPayload(card: ToolResultCard): boolean {
+  return isReadTool(card.tool) || isEditTool(card.tool) || isWriteTool(card.tool);
+}
+
+function unmountPayload(): void {
+  unmountCurrentPayload();
+  currentPayload = null;
+  currentPayloadContainer = null;
+}
+
+function unmountCurrentPayload(): void {
+  currentPayload?.unmount();
+  currentPayload = null;
+}
+
+function renderStatus(
+  container: HTMLElement,
+  message: string,
+  tone: "muted" | "error" = "muted",
+): void {
+  unmountCurrentPayload();
+  container.replaceChildren(element("div", { className: `status ${tone}`, text: message }));
+}
+
+function renderPrePayload(
+  container: HTMLElement,
+  text: string,
+  tool: string,
+): void {
+  unmountCurrentPayload();
+  container.replaceChildren(element("pre", { className: `text-payload ${tool}`, text }));
+}
+
+function renderSummaryBadge(card: ToolResultCard): HTMLElement {
+  const summary = card.summary ?? {};
+
+  if (isReviewTool(card.tool)) {
+    const stats = element("span", { className: "stats" });
+    stats.setAttribute("aria-label", "Review diff statistics");
+    stats.append(
+      element("span", { className: "add", text: `+${String(summary.additions ?? 0)}` }),
+      element("span", { className: "remove", text: `-${String(summary.removals ?? 0)}` }),
+    );
+    return stats;
+  }
+
+  if (isEditTool(card.tool) || isWriteTool(card.tool)) {
+    const stats = element("span", { className: "stats" });
+    stats.setAttribute("aria-label", "Diff statistics");
+    stats.append(
+      element("span", { className: "add", text: `+${String(summary.additions ?? 0)}` }),
+      element("span", { className: "remove", text: `-${String(summary.removals ?? 0)}` }),
+    );
+    return stats;
+  }
+
+  if (card.tool === "open_workspace") {
+    const agentsFiles = summaryNumber(summary, "agentsFiles") ?? 0;
+    const skills = summaryNumber(summary, "skills") ?? 0;
+    const group = element("span", { className: "badge-group" });
+    group.setAttribute("aria-label", "Workspace summary");
+
+    const agentsBadge = element("span", {
+      className: `badge ${agentsFiles > 0 ? "success" : "muted"}`,
+      text: agentsFiles > 0 ? "AGENTS.md" : "No AGENTS.md",
+    });
+    if (agentsFiles > 0) {
+      agentsBadge.insertAdjacentHTML("afterbegin", checkCircleIcon());
+    }
+
+    group.append(agentsBadge, element("span", { className: "badge", text: `${skills} skills` }));
+    return group;
+  }
+
+  if (isShellTool(card.tool)) {
+    return element("span", { className: "badge", text: `ran · ${String(summary.lines ?? 0)} lines` });
+  }
+
+  if (isSearchTool(card.tool)) {
+    return element("span", { className: "badge", text: `${String(summary.lines ?? 0)} lines` });
+  }
+
+  return element("span", { className: "badge", text: `${String(summary.lines ?? 0)} lines` });
+}
+
+function renderReviewCard(card: ToolResultCard, display: ToolDisplay): void {
+  unmountPayload();
+
+  const files = card.files ?? [];
+  const summary = card.summary ?? {};
+  const visibleFiles = reviewFilesExpanded ? files : files.slice(0, 3);
+  const hiddenCount = Math.max(0, files.length - visibleFiles.length);
+  const main = element("main", { className: "shell" });
+  const section = element("section", { className: "tool-card review" });
+  const header = element("div", { className: "review-header" });
+  const icon = element("span", { className: "tool-icon", ariaHidden: "true" });
+  icon.innerHTML = display.icon;
+  const titleGroup = element("div", { className: "review-title-group" });
+
+  titleGroup.append(
+    element("span", { className: "tool-title", text: display.title }),
+    element("span", { className: "tool-label", text: display.label, title: display.label }),
+  );
+  header.append(icon, titleGroup, renderSummaryBadge(card));
+
+  const body = element("div", { className: "review-summary" });
+  currentPayloadContainer = body;
+
+  const actions = element("div", { className: "review-actions" });
+  if (hiddenCount > 0) {
+    const showMore = element("button", {
+      className: "review-action",
+      type: "button",
+      text: `Show ${hiddenCount} more ${hiddenCount === 1 ? "file" : "files"}`,
+    });
+    showMore.addEventListener("click", () => {
+      reviewFilesExpanded = true;
+      render();
+    });
+    actions.append(showMore);
+  }
+
+  section.append(header, body);
+  if (actions.childElementCount > 0) {
+    section.append(actions);
+  }
+
+  main.append(section);
+  appRoot.replaceChildren(main);
+  renderPayloadIfNeeded();
+}
+
+function renderChevron(isExpanded: boolean, visible: boolean): HTMLElement {
+  const chevron = element("span", {
+    className: visible ? `chevron ${isExpanded ? "expanded" : ""}` : "chevron",
+    ariaHidden: "true",
+  });
+
+  if (visible) {
+    chevron.innerHTML = iconSvg('<path d="m6 9 6 6 6-6" />');
+  }
+
+  return chevron;
+}
+
+function workspacePayloadText(card: ToolResultCard): string {
   const agentsFiles = card.agentsFiles ?? [];
   const availableAgentsFiles = card.availableAgentsFiles ?? [];
   const skills = card.skills ?? [];
@@ -355,9 +443,9 @@ function WorkspacePayload({ card }: { card: ToolResultCard }) {
     agentsFiles.length > 0
       ? `\n${formatAgentsFilesForPayload(agentsFiles)}`
       : "\nAGENTS.md: none loaded",
-  ].filter(Boolean);
+  ].filter((line): line is string => typeof line === "string");
 
-  return <pre className="text-payload open_workspace">{lines.join("\n")}</pre>;
+  return lines.join("\n");
 }
 
 function formatAgentsFilesForPayload(
@@ -372,161 +460,45 @@ function formatAgentsFilesForPayload(
     .join("\n\n");
 }
 
-function FilePayload({
-  path,
-  text,
-  startLine,
-  fileOptions,
-}: {
-  path: string;
-  text: string;
-  startLine: number;
-  fileOptions: FileStreamOptions;
-}) {
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-
-    const fileStream = new FileStream({
-      ...fileOptions,
-      lang: getFiletypeFromFileName(path),
-      startingLineIndex: startLine,
-    });
-    const source = new ReadableStream<string>({
-      start(controller) {
-        controller.enqueue(text);
-        controller.close();
-      },
-    });
-    let disposed = false;
-
-    void fileStream.setup(source, wrapper).then(() => {
-      if (!disposed) return;
-      fileStream.cleanUp();
-      wrapper.replaceChildren();
-    });
-
-    return () => {
-      disposed = true;
-      fileStream.cleanUp();
-      wrapper.replaceChildren();
-    };
-  }, [fileOptions, path, startLine, text]);
-
-  return <div ref={wrapperRef} className="pierre-file" />;
-}
-
-function DiffPayload({
-  patch,
-  diffOptions,
-}: {
-  patch: string;
-  diffOptions: React.ComponentProps<typeof PatchDiff>["options"];
-}) {
-  return (
-    <PatchDiff
-      patch={patch}
-      options={diffOptions}
-      className="pierre-diff"
-    />
-  );
-}
-
-function SummaryBadges({ card }: { card: ToolResultCard }) {
-  const summary = card.summary ?? {};
-
-  if (isEditTool(card.tool) || isWriteTool(card.tool)) {
-    return (
-      <span className="stats" aria-label="Diff statistics">
-        <span className="add">+{String(summary.additions ?? 0)}</span>
-        <span className="remove">-{String(summary.removals ?? 0)}</span>
-      </span>
-    );
-  }
-
-  if (card.tool === "open_workspace") {
-    const agentsFiles = summaryNumber(summary, "agentsFiles") ?? 0;
-    const skills = summaryNumber(summary, "skills") ?? 0;
-
-    return (
-      <span className="badge-group" aria-label="Workspace summary">
-        <span className={`badge ${agentsFiles > 0 ? "success" : "muted"}`}>
-          {agentsFiles > 0 ? <CheckCircleIcon /> : null}
-          {agentsFiles > 0 ? "AGENTS.md" : "No AGENTS.md"}
-        </span>
-        <span className="badge">{skills} skills</span>
-      </span>
-    );
-  }
-
-  if (isShellTool(card.tool)) {
-    return <span className="badge">ran · {String(summary.lines ?? 0)} lines</span>;
-  }
-
-  if (isSearchTool(card.tool)) {
-    return <span className="badge">{String(summary.lines ?? 0)} lines</span>;
-  }
-
-
-  return <span className="badge">{String(summary.lines ?? 0)} lines</span>;
-}
-
-function isExpandableCard(card: ToolResultCard): boolean {
-  if (card.tool === "open_workspace") {
-    return (
-      Number(card.summary?.agentsFiles ?? 0) > 0 ||
-      Number(card.summary?.skills ?? 0) > 0 ||
-      Number(card.summary?.skillDiagnostics ?? 0) > 0 ||
-      Boolean(card.agentsFiles?.length) ||
-      Boolean(card.availableAgentsFiles?.length) ||
-      Boolean(card.skills?.length) ||
-      Boolean(card.skillDiagnostics?.length)
-    );
-  }
-
-  return Boolean(card.payload);
-}
-
-function getToolDisplay(card: ToolResultCard): {
-  icon: ReactNode;
-  title: string;
-  label: string;
-  tone: string;
-} {
+function getToolDisplay(card: ToolResultCard): ToolDisplay {
   const label = getToolLabel(card);
 
   switch (card.tool) {
     case "open_workspace":
-      return { icon: <FolderIcon />, title: "Workspace", label, tone: "workspace" };
+      return { icon: folderIcon(), title: "Workspace", label, tone: "workspace" };
     case "read_file":
     case "read":
-      return { icon: <FileIcon />, title: "Read File", label, tone: "read" };
+      return { icon: fileIcon(), title: "Read File", label, tone: "read" };
     case "write_file":
     case "write":
-      return { icon: <FilePlusIcon />, title: "Write File", label, tone: "write" };
+      return { icon: filePlusIcon(), title: "Write File", label, tone: "write" };
     case "edit_file":
     case "edit":
-      return { icon: <EditIcon />, title: "Edit File", label, tone: "edit" };
+      return { icon: editIcon(), title: "Edit File", label, tone: "edit" };
     case "grep_files":
     case "grep":
-      return { icon: <SearchIcon />, title: "Grep", label, tone: "search" };
+      return { icon: searchIcon(), title: "Grep", label, tone: "search" };
     case "find_files":
     case "glob":
-      return { icon: <FilesIcon />, title: "Glob", label, tone: "search" };
+      return { icon: filesIcon(), title: "Glob", label, tone: "search" };
     case "list_directory":
     case "ls":
-      return { icon: <ListIcon />, title: "List Directory", label, tone: "directory" };
+      return { icon: listIcon(), title: "List Directory", label, tone: "directory" };
     case "run_shell":
     case "bash":
-      return { icon: <TerminalIcon />, title: "Bash", label, tone: "shell" };
+      return { icon: terminalIcon(), title: "Bash", label, tone: "shell" };
+    case "review_changes":
+      return { icon: reviewIcon(), title: "Review Changes", label, tone: "review" };
   }
 }
 
 function getToolLabel(card: ToolResultCard): string {
   if (isShellTool(card.tool)) {
     return String(card.summary?.command ?? card.path ?? card.tool);
+  }
+  if (isReviewTool(card.tool)) {
+    const count = Number(card.summary?.files ?? card.files?.length ?? 0);
+    return count === 0 ? "No changes since last review" : `${count} changed ${count === 1 ? "file" : "files"}`;
   }
   if (card.path) return card.path;
   if (card.root) return card.root;
@@ -537,187 +509,87 @@ function getToolLabel(card: ToolResultCard): string {
   return card.tool;
 }
 
-function IconSvg({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  return (
-    <svg
-      aria-hidden="true"
-      className="icon-svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-    >
-      {children}
-    </svg>
-  );
+function toolNameFromMeta(result: CallToolResult): ToolName | undefined {
+  const meta = result._meta as Record<string, unknown> | undefined;
+  const tool = meta?.tool;
+  return isToolName(tool) ? tool : undefined;
 }
 
-function ChevronIcon({
-  expanded,
-  visible,
-}: {
-  expanded: boolean;
-  visible: boolean;
-}) {
-  if (!visible) return <span className="chevron" aria-hidden="true" />;
-
-  return (
-    <span className={`chevron ${expanded ? "expanded" : ""}`} aria-hidden="true">
-      <IconSvg>
-        <path d="m6 9 6 6 6-6" />
-      </IconSvg>
-    </span>
-  );
+function cardFromMeta(result: CallToolResult): Partial<ToolResultCard> | undefined {
+  const meta = result._meta as Record<string, unknown> | undefined;
+  const metaCard = meta?.card;
+  return metaCard && typeof metaCard === "object" ? metaCard : undefined;
 }
 
-function FolderIcon() {
-  return (
-    <IconSvg>
-      <path d="M3 7.5h6l2 2h10" />
-      <path d="M3 7.5v10A2.5 2.5 0 0 0 5.5 20h13a2.5 2.5 0 0 0 2.5-2.5v-8H3" />
-    </IconSvg>
-  );
+function getStructuredContent<T>(result: CallToolResult): T | undefined {
+  return result.structuredContent as T | undefined;
 }
 
-function FileIcon() {
-  return (
-    <IconSvg>
-      <path d="M14 3v5h5" />
-      <path d="M6 3h8l5 5v13H6z" />
-      <path d="M9 13h6" />
-      <path d="M9 17h4" />
-    </IconSvg>
-  );
+function element<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  options: {
+    className?: string;
+    text?: string;
+    type?: string;
+    title?: string;
+    ariaHidden?: string;
+    ariaExpanded?: string;
+    disabled?: boolean;
+  } = {},
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (options.className) node.className = options.className;
+  if (options.text !== undefined) node.textContent = options.text;
+  if (options.type !== undefined && "type" in node) node.setAttribute("type", options.type);
+  if (options.title !== undefined) node.title = options.title;
+  if (options.ariaHidden !== undefined) node.setAttribute("aria-hidden", options.ariaHidden);
+  if (options.ariaExpanded !== undefined) node.setAttribute("aria-expanded", options.ariaExpanded);
+  if (options.disabled !== undefined && "disabled" in node) {
+    (node as HTMLButtonElement).disabled = options.disabled;
+  }
+  return node;
 }
 
-function FilePlusIcon() {
-  return (
-    <IconSvg>
-      <path d="M14 3v5h5" />
-      <path d="M6 3h8l5 5v13H6z" />
-      <path d="M12 12v6" />
-      <path d="M9 15h6" />
-    </IconSvg>
-  );
+function iconSvg(children: string): string {
+  return `<svg aria-hidden="true" class="icon-svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8">${children}</svg>`;
 }
 
-function EditIcon() {
-  return (
-    <IconSvg>
-      <path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16z" />
-      <path d="m13.5 6.5 4 4" />
-    </IconSvg>
-  );
+function folderIcon(): string {
+  return iconSvg('<path d="M3 7.5h6l2 2h10" /><path d="M3 7.5v10A2.5 2.5 0 0 0 5.5 20h13a2.5 2.5 0 0 0 2.5-2.5v-8H3" />');
 }
 
-function SearchIcon() {
-  return (
-    <IconSvg>
-      <circle cx="11" cy="11" r="6" />
-      <path d="m16 16 4 4" />
-    </IconSvg>
-  );
+function fileIcon(): string {
+  return iconSvg('<path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /><path d="M9 13h6" /><path d="M9 17h4" />');
 }
 
-function FilesIcon() {
-  return (
-    <IconSvg>
-      <path d="M8 7V4h9l4 4v10h-3" />
-      <path d="M12 4v5h5" />
-      <path d="M4 7h9l4 4v10H4z" />
-      <path d="M13 7v5h4" />
-    </IconSvg>
-  );
+function filePlusIcon(): string {
+  return iconSvg('<path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /><path d="M12 12v6" /><path d="M9 15h6" />');
 }
 
-function ListIcon() {
-  return (
-    <IconSvg>
-      <path d="M8 6h12" />
-      <path d="M8 12h12" />
-      <path d="M8 18h12" />
-      <path d="M4 6h.01" />
-      <path d="M4 12h.01" />
-      <path d="M4 18h.01" />
-    </IconSvg>
-  );
+function editIcon(): string {
+  return iconSvg('<path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16z" /><path d="m13.5 6.5 4 4" />');
 }
 
-function TerminalIcon() {
-  return (
-    <IconSvg>
-      <path d="m5 7 5 5-5 5" />
-      <path d="M12 17h7" />
-    </IconSvg>
-  );
+function searchIcon(): string {
+  return iconSvg('<circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" />');
 }
 
-function CheckCircleIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="badge-icon"
-      fill="none"
-      viewBox="0 0 16 16"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="2"
-    >
-      <circle cx="8" cy="8" r="6" />
-      <path d="m5.5 8 1.7 1.7 3.4-3.5" />
-    </svg>
-  );
+function filesIcon(): string {
+  return iconSvg('<path d="M8 7V4h9l4 4v10h-3" /><path d="M12 4v5h5" /><path d="M4 7h9l4 4v10H4z" /><path d="M13 7v5h4" />');
 }
 
-function payloadText(payload: ToolPayload | undefined): string {
-  return (
-    payload?.content
-      ?.map((item) => {
-        if (item.type === "text") return item.text ?? "";
-        return `[${item.mimeType ?? "image"} image payload]`;
-      })
-      .filter(Boolean)
-      .join("\n\n") ?? ""
-  );
+function checkCircleIcon(): string {
+  return '<svg aria-hidden="true" class="badge-icon" fill="none" viewBox="0 0 16 16" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="8" cy="8" r="6" /><path d="m5.5 8 1.7 1.7 3.4-3.5" /></svg>';
 }
 
-function summaryNumber(
-  summary: Record<string, unknown> | undefined,
-  key: string,
-): number | undefined {
-  const value = summary?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+function listIcon(): string {
+  return iconSvg('<path d="M8 6h12" /><path d="M8 12h12" /><path d="M8 18h12" /><path d="M4 6h.01" /><path d="M4 12h.01" /><path d="M4 18h.01" />');
 }
 
-function EmptyState({
-  message,
-  tone = "muted",
-}: {
-  message: string;
-  tone?: "muted" | "error";
-}) {
-  return (
-    <main className="shell">
-      <section className={`empty ${tone}`}>{message}</section>
-    </main>
-  );
+function terminalIcon(): string {
+  return iconSvg('<path d="m5 7 5 5-5 5" /><path d="M12 17h7" />');
 }
 
-function StatusLine({
-  message,
-  tone = "muted",
-}: {
-  message: string;
-  tone?: "muted" | "error";
-}) {
-  return <div className={`status ${tone}`}>{message}</div>;
+function reviewIcon(): string {
+  return iconSvg('<path d="M5 4h14v16H5z" /><path d="M8 8h8" /><path d="M8 12h5" /><path d="M8 16h7" />');
 }
-
-createRoot(document.querySelector("#app")!).render(<AppRoot />);
