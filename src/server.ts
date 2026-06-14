@@ -31,7 +31,12 @@ function isAuthorized(req: Request, config: ServerConfig): boolean {
   return authorization === `Bearer ${config.authToken}`;
 }
 
-function sendJsonRpcError(res: Response, status: number, code: number, message: string): void {
+function sendJsonRpcError(
+  res: Response,
+  status: number,
+  code: number,
+  message: string,
+): void {
   res.status(status).json({
     jsonrpc: "2.0",
     error: { code, message },
@@ -41,37 +46,18 @@ function sendJsonRpcError(res: Response, status: number, code: number, message: 
 
 function createMcpServer(config: ServerConfig): McpServer {
   const workspaces = new WorkspaceRegistry(config);
-  const server = new McpServer({
-    name: "local-coding-workspace",
-    version: "0.1.0",
-  });
-
-  server.registerTool(
-    "server_info",
+  const server = new McpServer(
     {
-      title: "Server info",
-      description: "Return basic information about this local pi-on-mcp server.",
-      inputSchema: {},
+      name: "local-coding-workspace",
+      title: "Local Coding Workspace",
+      version: "0.1.0",
+      description:
+        "Local development harness that exposes workspace-scoped file, search, edit, and shell tools.",
     },
-    async () => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              name: "pi-on-mcp",
-              mcpName: "local-coding-workspace",
-              allowedRoots: config.allowedRoots,
-              mutationToolsEnabled: true,
-              workflow:
-                "Call open_workspace first, then use the returned workspaceId for read, edit, search, list, and shell tools.",
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    }),
+    {
+      instructions:
+        "Use this server as a local coding workspace harness. First call open_workspace with a project directory inside an allowed root. Then use the returned workspaceId for all file, search, edit, write, and shell tools. Follow any AGENTS.md context returned by open_workspace or subsequent tool calls. Prefer read_file and search tools for inspection, edit_file for targeted modifications, write_file only for new files or complete rewrites, and run_shell for tests/builds/git commands.",
+    },
   );
 
   server.registerTool(
@@ -79,9 +65,13 @@ function createMcpServer(config: ServerConfig): McpServer {
     {
       title: "Open workspace",
       description:
-        "Open a local project directory as a coding workspace. Call this before reading, editing, searching, or running commands. The result includes any AGENTS.md instructions discovered at the workspace root.",
+        "Open a local project directory as a coding workspace. This must be the first tool call before reading, editing, searching, writing, or running commands in a project. Returns a workspaceId and any AGENTS.md instructions discovered at the workspace root.",
       inputSchema: {
-        path: z.string().describe("Absolute path to a local project directory inside an allowed root."),
+        path: z
+          .string()
+          .describe(
+            "Absolute path to a local project directory inside an allowed root.",
+          ),
       },
       annotations: { readOnlyHint: true },
     },
@@ -106,7 +96,14 @@ function createMcpServer(config: ServerConfig): McpServer {
               2,
             ),
           },
-          ...(formatAgentsNotice(agentsFiles) ? [{ type: "text" as const, text: formatAgentsNotice(agentsFiles)! }] : []),
+          ...(formatAgentsNotice(agentsFiles)
+            ? [
+                {
+                  type: "text" as const,
+                  text: formatAgentsNotice(agentsFiles)!,
+                },
+              ]
+            : []),
         ],
       };
     },
@@ -117,20 +114,40 @@ function createMcpServer(config: ServerConfig): McpServer {
     {
       title: "Read file",
       description:
-        "Read a file inside an open workspace. Call open_workspace first, then pass workspaceId. If the file path enters a directory with an AGENTS.md that has not been loaded yet, that AGENTS.md is returned with the tool result.",
+        "Read a file inside an open workspace. Use this for file inspection instead of shell commands like cat or sed. Call open_workspace first and pass workspaceId. If the file path enters a directory with an AGENTS.md, that AGENTS.md context is returned as newly loaded or already loaded.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
-        path: z.string().describe("File path to read, relative to the workspace root."),
-        offset: z.number().int().positive().optional().describe("1-indexed line number to start reading from."),
-        limit: z.number().int().positive().optional().describe("Maximum number of lines to read."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        path: z
+          .string()
+          .describe("File path to read, relative to the workspace root."),
+        offset: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("1-indexed line number to start reading from."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Maximum number of lines to read."),
       },
       annotations: { readOnlyHint: true },
     },
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
       const targetPath = workspaces.resolvePath(workspace, input.path);
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForPath(workspace, targetPath));
-      return readFileTool(input, { cwd: workspace.root, root: workspace.root, agentsNotice });
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForPath(workspace, targetPath),
+      );
+      return readFileTool(input, {
+        cwd: workspace.root,
+        root: workspace.root,
+        agentsNotice,
+      });
     },
   );
 
@@ -139,10 +156,14 @@ function createMcpServer(config: ServerConfig): McpServer {
     {
       title: "Write file",
       description:
-        "Write a complete file inside an open workspace. Prefer edit_file for targeted changes. Call open_workspace first and pass workspaceId.",
+        "Create or completely overwrite a file inside an open workspace. Prefer edit_file for targeted changes to existing files. Call open_workspace first and pass workspaceId.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
-        path: z.string().describe("File path to write, relative to the workspace root."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        path: z
+          .string()
+          .describe("File path to write, relative to the workspace root."),
         content: z.string().describe("Complete new file content."),
       },
       annotations: { destructiveHint: true },
@@ -150,8 +171,14 @@ function createMcpServer(config: ServerConfig): McpServer {
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
       const targetPath = workspaces.resolvePath(workspace, input.path);
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForPath(workspace, targetPath));
-      return writeFileTool(input, { cwd: workspace.root, root: workspace.root, agentsNotice });
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForPath(workspace, targetPath),
+      );
+      return writeFileTool(input, {
+        cwd: workspace.root,
+        root: workspace.root,
+        agentsNotice,
+      });
     },
   );
 
@@ -160,14 +187,22 @@ function createMcpServer(config: ServerConfig): McpServer {
     {
       title: "Edit file",
       description:
-        "Edit one file inside an open workspace by replacing exact text blocks. Prefer this over write_file for small changes. Call open_workspace first and pass workspaceId.",
+        "Edit one file inside an open workspace by replacing exact text blocks. Prefer this over write_file for targeted changes. Each oldText must match a unique, non-overlapping region of the original file; merge nearby changes into one edit and keep oldText as small as possible while still unique. Call open_workspace first and pass workspaceId.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
-        path: z.string().describe("File path to edit, relative to the workspace root."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        path: z
+          .string()
+          .describe("File path to edit, relative to the workspace root."),
         edits: z
           .array(
             z.object({
-              oldText: z.string().describe("Exact text to replace. Must match uniquely in the original file."),
+              oldText: z
+                .string()
+                .describe(
+                  "Exact text to replace. Must match uniquely in the original file.",
+                ),
               newText: z.string().describe("Replacement text."),
             }),
           )
@@ -178,8 +213,14 @@ function createMcpServer(config: ServerConfig): McpServer {
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
       const targetPath = workspaces.resolvePath(workspace, input.path);
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForPath(workspace, targetPath));
-      return editFileTool(input, { cwd: workspace.root, root: workspace.root, agentsNotice });
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForPath(workspace, targetPath),
+      );
+      return editFileTool(input, {
+        cwd: workspace.root,
+        root: workspace.root,
+        agentsNotice,
+      });
     },
   );
 
@@ -188,20 +229,35 @@ function createMcpServer(config: ServerConfig): McpServer {
     {
       title: "Grep files",
       description:
-        "Search file contents inside an open workspace. Call open_workspace first and pass workspaceId.",
+        "Search file contents inside an open workspace. Use this before broad reads when looking for symbols, text, or usage sites. Respects the underlying Pi grep behavior, including project ignore rules. Call open_workspace first and pass workspaceId.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
         pattern: z.string().describe("Search pattern."),
-        path: z.string().optional().describe("Optional path or glob scope relative to the workspace root."),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            "Optional path or glob scope relative to the workspace root.",
+          ),
         include: z.string().optional().describe("Optional include glob."),
       },
       annotations: { readOnlyHint: true },
     },
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
-      const targetPath = input.path ? workspaces.resolvePath(workspace, input.path) : workspace.root;
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForPath(workspace, targetPath));
-      return grepFilesTool(input, { cwd: workspace.root, root: workspace.root, agentsNotice });
+      const targetPath = input.path
+        ? workspaces.resolvePath(workspace, input.path)
+        : workspace.root;
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForPath(workspace, targetPath),
+      );
+      return grepFilesTool(input, {
+        cwd: workspace.root,
+        root: workspace.root,
+        agentsNotice,
+      });
     },
   );
 
@@ -209,19 +265,33 @@ function createMcpServer(config: ServerConfig): McpServer {
     "find_files",
     {
       title: "Find files",
-      description: "Find files by glob pattern inside an open workspace. Call open_workspace first and pass workspaceId.",
+      description:
+        "Find files by glob pattern inside an open workspace. Use this to discover filenames or narrow file sets before reading. Respects the underlying Pi find behavior, including project ignore rules. Call open_workspace first and pass workspaceId.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
         pattern: z.string().describe("File glob pattern."),
-        path: z.string().optional().describe("Optional path scope relative to the workspace root."),
+        path: z
+          .string()
+          .optional()
+          .describe("Optional path scope relative to the workspace root."),
       },
       annotations: { readOnlyHint: true },
     },
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
-      const targetPath = input.path ? workspaces.resolvePath(workspace, input.path) : workspace.root;
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForPath(workspace, targetPath));
-      return findFilesTool(input, { cwd: workspace.root, root: workspace.root, agentsNotice });
+      const targetPath = input.path
+        ? workspaces.resolvePath(workspace, input.path)
+        : workspace.root;
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForPath(workspace, targetPath),
+      );
+      return findFilesTool(input, {
+        cwd: workspace.root,
+        root: workspace.root,
+        agentsNotice,
+      });
     },
   );
 
@@ -229,18 +299,29 @@ function createMcpServer(config: ServerConfig): McpServer {
     "list_directory",
     {
       title: "List directory",
-      description: "List a directory inside an open workspace. Call open_workspace first and pass workspaceId.",
+      description:
+        "List a directory inside an open workspace. Use this for directory inspection before reading files. Call open_workspace first and pass workspaceId.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
-        path: z.string().describe("Directory path to list, relative to the workspace root."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        path: z
+          .string()
+          .describe("Directory path to list, relative to the workspace root."),
       },
       annotations: { readOnlyHint: true },
     },
     async ({ workspaceId, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
       const targetPath = workspaces.resolvePath(workspace, input.path);
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForPath(workspace, targetPath));
-      return listDirectoryTool(input, { cwd: workspace.root, root: workspace.root, agentsNotice });
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForPath(workspace, targetPath),
+      );
+      return listDirectoryTool(input, {
+        cwd: workspace.root,
+        root: workspace.root,
+        agentsNotice,
+      });
     },
   );
 
@@ -249,22 +330,36 @@ function createMcpServer(config: ServerConfig): McpServer {
     {
       title: "Run shell",
       description:
-        "Run a shell command inside an open workspace. Call open_workspace first and pass workspaceId. This is powerful local execution and should only be exposed behind strong authentication.",
+        "Run a shell command inside an open workspace. Use for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Prefer read_file, grep_files, find_files, and list_directory for file inspection. Call open_workspace first and pass workspaceId. This is powerful local execution and should only be exposed behind strong authentication.",
       inputSchema: {
-        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
         command: z.string().describe("Shell command to run."),
         workingDirectory: z
           .string()
           .optional()
-          .describe("Optional working directory relative to the workspace root. Defaults to the workspace root."),
-        timeout: z.number().positive().max(300).optional().describe("Timeout in seconds. Defaults to 30, max 300."),
+          .describe(
+            "Optional working directory relative to the workspace root. Defaults to the workspace root.",
+          ),
+        timeout: z
+          .number()
+          .positive()
+          .max(300)
+          .optional()
+          .describe("Timeout in seconds. Defaults to 30, max 300."),
       },
       annotations: { destructiveHint: true },
     },
     async ({ workspaceId, workingDirectory, ...input }) => {
       const workspace = workspaces.getWorkspace(workspaceId);
-      const cwd = workspaces.resolveWorkingDirectory(workspace, workingDirectory);
-      const agentsNotice = formatAgentsNotice(await workspaces.loadAgentsForDirectory(workspace, cwd));
+      const cwd = workspaces.resolveWorkingDirectory(
+        workspace,
+        workingDirectory,
+      );
+      const agentsNotice = formatAgentsNotice(
+        await workspaces.loadAgentsForDirectory(workspace, cwd),
+      );
       return runShellTool(input, { cwd, root: workspace.root, agentsNotice });
     },
   );
@@ -334,8 +429,12 @@ export function createServer(config = loadConfig()): RunningServer {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { app, config } = createServer();
   app.listen(config.port, config.host, () => {
-    console.log(`pi-on-mcp listening on http://${config.host}:${config.port}/mcp`);
+    console.log(
+      `pi-on-mcp listening on http://${config.host}:${config.port}/mcp`,
+    );
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
-    console.log(config.authToken ? "auth: bearer token required" : "auth: disabled");
+    console.log(
+      config.authToken ? "auth: bearer token required" : "auth: disabled",
+    );
   });
 }

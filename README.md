@@ -8,7 +8,6 @@ delegated to a separate local agent loop.
 
 ## Current Tools
 
-- `server_info`
 - `open_workspace`
 - `read_file`
 - `write_file`
@@ -17,6 +16,9 @@ delegated to a separate local agent loop.
 - `find_files`
 - `list_directory`
 - `run_shell`
+
+Server-level workflow guidance is exposed through MCP initialize instructions,
+not a dedicated info tool.
 
 ## Workspace Flow
 
