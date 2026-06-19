@@ -141,3 +141,55 @@ The shell tool is for commands that belong in a terminal:
 
 File writes should go through the edit/write tools rather than shell
 redirection, heredocs, `tee`, `sed -i`, or generated scripts.
+
+## Optional Codex Worker Handoff
+
+ChatGPT can act as an external Planner and hand a structured task to the local Codex CLI. After inspecting the project, write the version 1 contract to:
+
+```text
+.devspace/spec/current.json
+```
+
+Example:
+
+```json
+{
+  "version": 1,
+  "project": "example",
+  "goal": "Add greeting support",
+  "architecturePlan": {
+    "summary": "Add one focused greeting module",
+    "modules": [
+      {
+        "name": "greeting",
+        "responsibility": "Build greetings",
+        "files": ["src/greeting.ts"]
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Implement greeting",
+      "instruction": "Create the greeting module.",
+      "files": ["src/greeting.ts"],
+      "constraints": ["Do not add dependencies"],
+      "acceptanceCriteria": ["The module exports greet"]
+    }
+  ]
+}
+```
+
+Review the Spec before running it. From the project checkout:
+
+```bash
+devspace run
+devspace status
+devspace runs
+```
+
+`devspace run <run-id>` explicitly resumes an incomplete run in its existing mutable worktree. Completed tasks are skipped and the next task attempt is recorded separately.
+
+New runs start from the source checkout's committed `HEAD`. The uncommitted Spec is loaded before worktree creation, but other uncommitted source changes are not copied. DevSpace reports when the source checkout is dirty.
+
+The Worker pipeline is traceable, not replayable. `events.jsonl` reconstructs lifecycle state only. Exact prompts, logs, Codex version, worktree hashes, and diffs help explain attempts but cannot reproduce the same model output or patch.

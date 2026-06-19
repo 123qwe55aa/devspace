@@ -26,7 +26,7 @@
     "build:app": "vite build",
     "dev": "node scripts/dev-server.mjs",
     "start": "node dist/cli.js serve",
-    "test": "tsx src/config.test.ts && tsx src/roots.test.ts && tsx src/skills.test.ts && tsx src/workspaces.test.ts && tsx src/review-checkpoints.test.ts",
+    "test": "tsx src/config.test.ts && tsx src/roots.test.ts && tsx src/skills.test.ts && tsx src/workspaces.test.ts && tsx src/review-checkpoints.test.ts && tsx src/worker/spec.test.ts && tsx src/worker/compiler.test.ts && tsx src/worker/run-store.test.ts && tsx src/worker/evidence.test.ts && tsx src/worker/backend.test.ts && tsx src/worker/orchestrator.test.ts && tsx src/worker/commands.test.ts && tsx src/worker/pipeline.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [],

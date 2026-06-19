@@ -98,6 +98,17 @@ DevSpace gives ChatGPT tools to:
 - discover local agent skills from your skill folders
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
 
+## Optional Codex Worker Pipeline
+
+ChatGPT can hand a structured task to the local Codex CLI without changing the normal MCP workflow:
+
+1. Ask ChatGPT to inspect the project and write `.devspace/spec/current.json`.
+2. Review the JSON task contract.
+3. Run `devspace run` from the project checkout.
+4. Inspect the isolated result with `devspace status` or list runs with `devspace runs`.
+
+DevSpace creates a detached managed worktree and never commits or pushes Worker changes. A resumed run continues the same mutable worktree; it is recovery, not deterministic replay. The event journal reconstructs lifecycle state, while prompts, logs, fingerprints, and diffs are execution evidence rather than reproducible results.
+
 ## Mental Model
 
 DevSpace is remote access to selected local folders.
