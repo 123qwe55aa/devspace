@@ -15,7 +15,7 @@ import {
 } from "./user-config.js";
 import { expandHomePath } from "./roots.js";
 
-type Command = "serve" | "init" | "doctor" | "config" | "help";
+type Command = "serve" | "init" | "doctor" | "config" | "run" | "status" | "runs" | "help";
 const require = createRequire(import.meta.url);
 const SUPPORTED_NODE_RANGE = ">=20.12 <27";
 
@@ -39,6 +39,20 @@ async function main(argv: string[]): Promise<void> {
     case "config":
       runConfigCommand(args);
       return;
+    case "run":
+    case "status":
+    case "runs": {
+      await ensureConfigured();
+      const { executeWorkerCommand, parseWorkerCommand } = await import("./worker/commands.js");
+      const files = loadDevspaceFiles();
+      await executeWorkerCommand({
+        command: parseWorkerCommand(command, args),
+        cwd: process.cwd(),
+        config: loadConfig(),
+        runsRoot: resolve(files.dir, "runs"),
+      });
+      return;
+    }
     case "help":
       printHelp();
       return;
@@ -47,7 +61,14 @@ async function main(argv: string[]): Promise<void> {
 
 function normalizeCommand(command: string | undefined): Command {
   if (!command || command === "serve" || command === "start") return "serve";
-  if (command === "init" || command === "doctor" || command === "config") return command;
+  if (
+    command === "init" ||
+    command === "doctor" ||
+    command === "config" ||
+    command === "run" ||
+    command === "status" ||
+    command === "runs"
+  ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
   throw new Error(`Unknown command: ${command}`);
 }
@@ -261,6 +282,10 @@ function printHelp(): void {
       "  devspace doctor          Show config, runtime, and native dependency status",
       "  devspace config get      Print persisted config",
       "  devspace config set publicBaseUrl <url|null>",
+      "  devspace run              Run .devspace/spec/current.json in a new worktree",
+      "  devspace run <run-id>     Resume an incomplete run in its existing worktree",
+      "  devspace status [run-id]  Show one run; defaults to the latest",
+      "  devspace runs             List recent runs",
       "",
       "For temporary tunnels:",
       "  DEVSPACE_PUBLIC_BASE_URL=https://example.trycloudflare.com devspace serve",
