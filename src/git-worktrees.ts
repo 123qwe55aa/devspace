@@ -33,33 +33,23 @@ export interface ManagedWorktree {
   managed: boolean;
 }
 
+export interface WorktreeSource {
+  sourceRoot: string;
+  baseSha: string;
+  dirtySource: boolean;
+}
+
 export async function createManagedWorktree(input: {
   sourcePath: string;
   baseRef?: string;
   config: ServerConfig;
 }): Promise<ManagedWorktree> {
   const sourcePath = assertAllowedPath(input.sourcePath, input.config.allowedRoots);
-
-  try {
-    const sourceStats = await stat(sourcePath);
-    if (!sourceStats.isDirectory()) {
-      throw new GitWorktreeError(
-        "GIT_REPOSITORY_NOT_FOUND",
-        `Cannot open workspace in worktree mode because the source path is not a directory: ${input.sourcePath}`,
-      );
-    }
-  } catch (error) {
-    if (error instanceof GitWorktreeError) throw error;
-    throw new GitWorktreeError(
-      "GIT_REPOSITORY_NOT_FOUND",
-      `Cannot open workspace in worktree mode because the source path does not exist: ${input.sourcePath}`,
-    );
-  }
-
-  const sourceRoot = await resolveGitRoot(sourcePath, input.config.allowedRoots);
+  const source = await inspectWorktreeSource(input);
+  const sourceRoot = source.sourceRoot;
   const baseRef = input.baseRef ?? "HEAD";
-  const baseSha = await resolveBaseCommit(sourceRoot, baseRef);
-  const dirtySource = (await git(["status", "--porcelain=v1"], sourceRoot)).trim().length > 0;
+  const baseSha = source.baseSha;
+  const dirtySource = source.dirtySource;
   const worktreePath = managedWorktreePath({
     worktreeRoot: input.config.worktreeRoot,
     repoRoot: sourceRoot,
@@ -88,6 +78,35 @@ export async function createManagedWorktree(input: {
     detached: true,
     managed: true,
   };
+}
+
+export async function inspectWorktreeSource(input: {
+  sourcePath: string;
+  baseRef?: string;
+  config: ServerConfig;
+}): Promise<WorktreeSource> {
+  const sourcePath = assertAllowedPath(input.sourcePath, input.config.allowedRoots);
+  try {
+    const sourceStats = await stat(sourcePath);
+    if (!sourceStats.isDirectory()) {
+      throw new GitWorktreeError(
+        "GIT_REPOSITORY_NOT_FOUND",
+        `Cannot open workspace in worktree mode because the source path is not a directory: ${input.sourcePath}`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof GitWorktreeError) throw error;
+    throw new GitWorktreeError(
+      "GIT_REPOSITORY_NOT_FOUND",
+      `Cannot open workspace in worktree mode because the source path does not exist: ${input.sourcePath}`,
+    );
+  }
+
+  const sourceRoot = await resolveGitRoot(sourcePath, input.config.allowedRoots);
+  const baseRef = input.baseRef ?? "HEAD";
+  const baseSha = await resolveBaseCommit(sourceRoot, baseRef);
+  const dirtySource = (await git(["status", "--porcelain=v1"], sourceRoot)).trim().length > 0;
+  return { sourceRoot, baseSha, dirtySource };
 }
 
 async function resolveGitRoot(path: string, allowedRoots: string[]): Promise<string> {
