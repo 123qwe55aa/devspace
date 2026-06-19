@@ -13,7 +13,8 @@ DevSpace does not add a Planner or Planner prompt. The first version also exclud
 - Preserve task status, logs, and resulting changes for inspection.
 - Keep all existing `serve`, `init`, `doctor`, `config`, and MCP behavior unchanged.
 - Keep the handoff inspectable through a project-local JSON file.
-- Make the exact Worker input reproducible through a versioned compiler and persisted compiled prompts.
+- Make the exact Worker input inspectable through a versioned compiler and persisted compiled prompts.
+- Capture enough execution evidence to explain material differences between attempts without claiming deterministic results.
 
 ## Non-Goals
 
@@ -23,7 +24,8 @@ DevSpace does not add a Planner or Planner prompt. The first version also exclud
 - Exposing Worker or Verifier as MCP tools.
 - Automatically retrying or repairing failed tasks.
 - Scheduling a task dependency graph or running tasks concurrently.
-- Claiming that a resumed mutable worktree is a deterministic replay.
+- Replaying or reproducing Codex output, file changes, or other execution results deterministically.
+- Constraining Codex to patch-only output.
 - Committing or pushing generated changes.
 - Supporting model providers other than the local `codex` CLI in this version.
 
@@ -118,9 +120,9 @@ Owns the Zod schema and inferred TypeScript types. It resolves `.devspace/spec/c
 
 ### Task Compiler
 
-Transforms a validated Spec snapshot into normalized `ExecutionTask` records. Compilation is deterministic for the tuple `(spec version, compiler version, worker prompt version, Spec snapshot, task ID)`.
+Transforms a validated Spec snapshot into ephemeral normalized `ExecutionTask` records. Compilation is deterministic for the tuple `(spec version, compiler version, worker prompt version, Spec snapshot, task ID)`; Worker execution is not.
 
-Each compiled task contains the normalized task fields, run and task identity, base commit SHA, prompt version, exact prompt text, and a SHA-256 prompt hash. The compiled prompt is persisted before a Worker starts, so later debugging does not depend on reconstructing historical template behavior.
+Each compiled task contains the normalized task fields, run and task identity, base commit SHA, prompt version, exact prompt text, and a SHA-256 prompt hash. There is no persisted execution-plan state. The exact prompt and hash are persisted as attempt evidence before a Worker starts, so later debugging does not depend on reconstructing historical template behavior.
 
 The initial template is shipped as `worker-prompt-v1.md`. A change that can alter Worker interpretation requires a new prompt version rather than silently mutating version 1.
 
@@ -141,16 +143,17 @@ Persists run metadata under `~/.devspace/runs/<run-id>` using atomic file replac
 ```text
 run.json
 spec.json
-execution-plan.json
 events.jsonl
 tasks/
   T1/
     attempt-1.prompt.md
     attempt-1.log
+    attempt-1.diff
+    attempt-1-fingerprint.json
 run.lock
 ```
 
-`spec.json` is an immutable snapshot of the project-local Spec. `execution-plan.json` stores normalized tasks, compiler and prompt versions, and prompt hashes. `events.jsonl` is the canonical append-only state history. `run.json` is an atomically replaced current-state projection for fast status reads. Large process output remains in per-attempt log files.
+`spec.json` is the immutable input snapshot. `events.jsonl` is the only lifecycle-state authority. `run.json` is a disposable, atomically replaced projection for fast status reads and can always be rebuilt from events. Prompts, logs, fingerprints, and diffs are execution evidence referenced by events; they are not state authorities.
 
 ### Worktree Coordinator
 
@@ -176,7 +179,7 @@ Coordinates validation, compilation, run creation, state transitions, worktree s
 2. Load and validate `.devspace/spec/current.json`.
 3. Run deterministic semantic lint and report warnings and errors.
 4. Confirm that `codex` is available and resolve the source repository's base commit SHA.
-5. Compile and persist the immutable Spec snapshot and versioned execution plan.
+5. Persist the immutable Spec snapshot and compile ephemeral versioned execution tasks.
 6. Create the run event journal and current-state projection.
 7. Acquire the run's exclusive lock and create the managed worktree at the recorded base SHA.
 8. Append the transition from `planned` to `running` and update the projection.
@@ -184,20 +187,39 @@ Coordinates validation, compilation, run creation, state transitions, worktree s
    - mark the task `running`;
    - allocate a monotonically increasing attempt number;
    - persist the compiled prompt and its hash for that attempt;
+   - capture the pre-attempt execution fingerprint;
    - invoke a fresh Worker session through `WorkerBackend` in the shared worktree;
    - stream process output to the attempt log;
+   - capture the post-attempt worktree hash and diff;
    - mark the task `completed` on exit code zero;
    - otherwise mark the task and run `failed`, then stop.
 10. Mark the run `completed` after every task completes.
 11. Release the lock in a `finally` path.
 
-Re-running a failed run is done explicitly with `devspace run <run-id>`. It skips completed tasks and creates a new attempt for the first incomplete task in the same mutable worktree. This is recovery, not deterministic replay. Running `devspace run` without an ID creates a new run, records the current `HEAD` as its base SHA, snapshots the current Spec, and creates a fresh worktree.
+Re-running a failed run is done explicitly with `devspace run <run-id>`. It skips completed tasks and creates a new attempt for the first incomplete task in the same mutable worktree. This is recovery, not replay. Running `devspace run` without an ID creates a new run, records the current `HEAD` as its base SHA, snapshots the current Spec, and creates a fresh worktree. Even a fresh run with the same Spec and base SHA may produce different results because Codex, external tools, and the environment are not deterministic.
 
 ## Worker Prompt and Boundaries
 
 The Task Compiler builds the Worker prompt from the overall goal, architecture summary, exactly one assigned task, normalized constraints, and acceptance criteria. It prohibits redesign, unrelated features, commits, and pushes. Each Worker process can inspect and modify the shared worktree but receives no authority outside it.
 
-Prompt bytes and hashes are persisted per attempt. Compiler and prompt versions are stored in the execution plan, independently of the Spec schema version.
+Prompt bytes and hashes are persisted per attempt. Compiler and prompt versions are recorded in the run-created and attempt-started events, independently of the Spec schema version.
+
+## Traceability, Not Replay
+
+DevSpace reconstructs lifecycle state and preserves execution evidence; it does not replay computation. Event reduction can answer which tasks and attempts ran, in what order, with which inputs, and how each process exited. It cannot regenerate the same Codex response or patch.
+
+Each attempt records a best-effort execution fingerprint containing:
+
+- exact prompt hash and prompt artifact path;
+- Codex CLI version and exact non-secret process arguments;
+- explicitly selected model or model configuration when observable, otherwise `unknown`;
+- run base commit SHA;
+- pre-attempt and post-attempt worktree hashes;
+- timestamps, exit status, log path, and resulting diff artifact path.
+
+The fingerprint does not claim to capture hidden model context, remote model revisions, network responses, ambient environment state, or every file read by Codex. Its purpose is difference explanation, not reproducibility.
+
+A worktree hash is SHA-256 over the recorded base SHA, the bytes of the tracked binary Git diff from `HEAD`, and a sorted manifest of non-ignored untracked paths with their content hashes. Ignored files are excluded and that exclusion is recorded in the fingerprint format version. The `.diff` artifact contains the tracked binary Git diff; the fingerprint contains the untracked manifest. These artifacts explain source changes but are not a complete machine snapshot.
 
 ## State Model
 
@@ -212,11 +234,11 @@ Tasks use `pending`, `running`, `completed`, and `failed`. A stale `running` sta
 
 ## Event Journal and Projection
 
-Every state change is first appended as a versioned event to `events.jsonl`, including run creation, worktree creation, task attempt start, Worker exit, task completion or failure, and run completion or failure. Events carry a monotonically increasing sequence number, timestamp, run ID, event type, and event-specific payload.
+Every lifecycle state change is first appended as a versioned event to `events.jsonl`, including run creation, worktree creation, task attempt start, Worker exit, task completion or failure, and run completion or failure. Events carry a monotonically increasing sequence number, timestamp, run ID, event type, and event-specific payload.
 
-While the run lock is held, DevSpace is the sole writer. After appending an event it atomically replaces `run.json` with the newly reduced projection. Recovery can rebuild `run.json` by replaying valid events in sequence. If a process dies during the last append, a syntactically incomplete final JSONL line is ignored and reported; malformed or out-of-order earlier events are treated as corruption.
+While the run lock is held, DevSpace is the sole writer. After appending an event it atomically replaces `run.json` with the newly reduced projection. Recovery can rebuild `run.json` by reducing valid events in sequence. If a process dies during the last append, a syntactically incomplete final JSONL line is ignored and reported; malformed or out-of-order earlier events are treated as corruption.
 
-Logs and worktree contents are execution artifacts, not state authority. An attempt event records the prompt hash, log path, process result, and relevant timestamps.
+`events.jsonl` can reconstruct lifecycle state only. It cannot reconstruct Worker behavior, worktree contents, or generated results. Logs, prompts, fingerprints, diffs, and worktree contents are evidence artifacts, not lifecycle-state authority.
 
 ## Error Handling
 
@@ -228,7 +250,9 @@ Logs and worktree contents are execution artifacts, not state authority. An atte
 - Duplicate execution: reject when the run lock is held.
 - Worktree failure: mark the created run failed without starting a Worker.
 - Worker non-zero exit or interruption: mark the current task and run failed, preserve all changes and logs, and stop subsequent tasks.
-- Persistence failure: preserve the previous projection; rebuild it from the valid journal prefix on the next status or resume operation.
+- Projection persistence failure: preserve the previous projection; rebuild it from the valid journal prefix on the next status or resume operation.
+- Evidence artifact failure before Worker launch: do not start the attempt and record the run failure when possible.
+- Evidence artifact failure after Worker exit: preserve available evidence, record the missing artifact in the exit event, and mark the run failed rather than presenting an incomplete trace as successful.
 - Journal corruption before the final line or a sequence gap: refuse execution and report the corrupt event location.
 
 No failure causes automatic worktree deletion.
@@ -248,9 +272,10 @@ Unit tests cover:
 - strict Task Spec validation and duplicate task IDs;
 - semantic lint limits, safe paths, and missing-path warnings;
 - default Spec path resolution and malformed input;
-- deterministic compilation, prompt versions, and stable prompt hashes;
+- deterministic compilation, prompt versions, and stable prompt hashes without claiming deterministic execution;
 - run state transitions, event reduction, and atomic projection persistence;
 - truncated final-event recovery and earlier-event corruption rejection;
+- execution fingerprint capture with unavailable fields represented as `unknown`;
 - latest-run selection and command argument parsing;
 - attempt numbering, recovery semantics, and lock rejection;
 - orchestrator behavior through a fake `WorkerBackend`.
@@ -263,10 +288,11 @@ Integration tests use a fake `codex` executable and temporary Git repositories t
 - tasks share changes through the same worktree;
 - a failed Worker stops later tasks and preserves state and logs;
 - explicit resume skips completed tasks and creates a new attempt;
-- a new run uses a fresh worktree and records its own base SHA.
+- a new run uses a fresh worktree and records its own base SHA;
+- prompt, fingerprint, and diff artifacts are referenced by attempt events but never treated as lifecycle state.
 
 The pipeline does not run tests, lint, or build commands from the generated target project.
 
 ## Delivery Boundary
 
-The MVP is complete when the three CLI commands work with a local Codex installation, compiled Worker inputs are versioned and inspectable, run state can be reconstructed from its event journal, existing MCP behavior remains unchanged, orchestration tests pass without a real model, and the DevSpace package build succeeds.
+The MVP is complete when the three CLI commands work with a local Codex installation, compiled Worker inputs and execution evidence are versioned and inspectable, lifecycle state can be reconstructed from its event journal without any reproducibility claim, existing MCP behavior remains unchanged, orchestration tests pass without a real model, and the DevSpace package build succeeds.
