@@ -53,6 +53,7 @@ export async function executeWorkerCommand(input: {
   cwd: string;
   config: ServerConfig;
   runsRoot: string;
+  signal?: AbortSignal;
   output?: { write(chunk: string): unknown };
 }): Promise<void> {
   const output = input.output ?? process.stdout;
@@ -66,12 +67,12 @@ export async function executeWorkerCommand(input: {
 
   switch (input.command.kind) {
     case "run-new": {
-      const run = await orchestrator.startNewRun(input.cwd);
+      const run = await orchestrator.startNewRun(input.cwd, input.signal);
       output.write(`${formatRunStatus(run)}\n`);
       return;
     }
     case "run-resume": {
-      const run = await orchestrator.resumeRun(input.command.runId);
+      const run = await orchestrator.resumeRun(input.command.runId, input.signal);
       output.write(`${formatRunStatus(run)}\n`);
       return;
     }

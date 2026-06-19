@@ -105,6 +105,7 @@ export function reduceRunEvents(events: RunEvent[]): RunProjection {
     updatedAt: created.timestamp,
     tasks: created.tasks.map((task) => ({ ...task, state: "pending", attempts: 0 })),
   };
+  const activeAttempts = new Map<string, { attempt: number; exited: boolean }>();
 
   const task = (taskId: string): RunTaskProjection => {
     const found = projection.tasks.find((candidate) => candidate.id === taskId);
@@ -119,60 +120,113 @@ export function reduceRunEvents(events: RunEvent[]): RunProjection {
     }
     projection.updatedAt = event.timestamp;
     if (index === 0) continue;
+    if (projection.state === "completed") {
+      throw new Error("Corrupt event journal: completed run is terminal");
+    }
 
     switch (event.type) {
       case "run_created":
         throw new Error("Corrupt event journal: duplicate run_created");
       case "worktree_created":
+        if (projection.state !== "planned" || projection.worktreePath) {
+          throw new Error("Corrupt event journal: invalid worktree transition");
+        }
         projection.worktreePath = event.worktreePath;
         projection.dirtySource = event.dirtySource;
         break;
       case "run_started":
-        if (projection.state === "completed") {
-          throw new Error("Corrupt event journal: completed run cannot restart");
+        if (
+          (projection.state !== "planned" && projection.state !== "failed") ||
+          activeAttempts.size > 0
+        ) {
+          throw new Error("Corrupt event journal: run cannot start from its current state");
         }
         projection.state = "running";
         projection.error = undefined;
         break;
       case "task_attempt_started": {
         const current = task(event.taskId);
-        if (current.state === "completed" || event.attempt !== current.attempts + 1) {
+        if (
+          projection.state !== "running" ||
+          current.state === "completed" ||
+          activeAttempts.has(event.taskId) ||
+          event.attempt !== current.attempts + 1
+        ) {
+          if (projection.state !== "running") {
+            throw new Error("Corrupt event journal: task attempt requires a running run");
+          }
           throw new Error(`Corrupt event journal: invalid attempt for task ${event.taskId}`);
         }
         current.state = "running";
         current.attempts = event.attempt;
+        activeAttempts.set(event.taskId, { attempt: event.attempt, exited: false });
         break;
       }
-      case "task_attempt_exited":
-        if (event.attempt !== task(event.taskId).attempts) {
+      case "task_attempt_exited": {
+        const current = task(event.taskId);
+        const active = activeAttempts.get(event.taskId);
+        if (
+          projection.state !== "running" ||
+          event.attempt !== current.attempts ||
+          !active ||
+          active.attempt !== event.attempt
+        ) {
           throw new Error(`Corrupt event journal: invalid exit attempt for task ${event.taskId}`);
         }
+        if (active.exited) {
+          throw new Error(`Corrupt event journal: duplicate exit for task ${event.taskId}`);
+        }
+        active.exited = true;
         break;
+      }
       case "task_completed": {
         const current = task(event.taskId);
-        if (event.attempt !== current.attempts) {
-          throw new Error(`Corrupt event journal: invalid completion for task ${event.taskId}`);
+        const active = activeAttempts.get(event.taskId);
+        if (
+          projection.state !== "running" ||
+          event.attempt !== current.attempts ||
+          !active ||
+          active.attempt !== event.attempt ||
+          !active.exited
+        ) {
+          throw new Error(`Corrupt event journal: task ${event.taskId} requires an exit before completion`);
         }
         current.state = "completed";
+        activeAttempts.delete(event.taskId);
         break;
       }
       case "task_failed": {
         const current = task(event.taskId);
-        if (event.attempt !== current.attempts) {
-          throw new Error(`Corrupt event journal: invalid failure for task ${event.taskId}`);
+        const active = activeAttempts.get(event.taskId);
+        if (
+          projection.state !== "running" ||
+          event.attempt !== current.attempts ||
+          !active ||
+          active.attempt !== event.attempt ||
+          !active.exited
+        ) {
+          throw new Error(`Corrupt event journal: task ${event.taskId} requires an exit before failure`);
         }
         current.state = "failed";
         projection.error = event.message;
+        activeAttempts.delete(event.taskId);
         break;
       }
       case "run_completed":
-        if (projection.tasks.some((candidate) => candidate.state !== "completed")) {
+        if (
+          projection.state !== "running" ||
+          activeAttempts.size > 0 ||
+          projection.tasks.some((candidate) => candidate.state !== "completed")
+        ) {
           throw new Error("Corrupt event journal: run completed before all tasks");
         }
         projection.state = "completed";
         projection.error = undefined;
         break;
       case "run_failed":
+        if (activeAttempts.size > 0) {
+          throw new Error("Corrupt event journal: run failed with an active task attempt");
+        }
         projection.state = "failed";
         projection.error = event.message;
         break;

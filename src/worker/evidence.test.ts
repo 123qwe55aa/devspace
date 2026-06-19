@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { captureWorktreeEvidence } from "./evidence.js";
+import { captureWorktreeEvidence, hashUntrackedPath } from "./evidence.js";
 
 const execFileAsync = promisify(execFile);
 const repo = await mkdtemp(join(tmpdir(), "devspace-evidence-test-"));
@@ -28,6 +28,14 @@ assert.match(evidence.untracked[0]!.sha256, /^[a-f0-9]{64}$/);
 assert.match(evidence.worktreeHash, /^[a-f0-9]{64}$/);
 assert.equal((await captureWorktreeEvidence(repo, baseSha)).worktreeHash, evidence.worktreeHash);
 assert.equal(evidence.ignoredFilesExcluded, true);
+
+if (platform() !== "win32") {
+  await execFileAsync("mkfifo", [join(repo, "worker.fifo")]);
+  await assert.rejects(
+    () => hashUntrackedPath(repo, "worker.fifo"),
+    /unsupported untracked file type.*worker\.fifo/i,
+  );
+}
 
 async function git(args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { cwd: repo })).stdout;

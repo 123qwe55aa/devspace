@@ -22,7 +22,12 @@ for await (const chunk of process.stdin) prompt += chunk;
 await writeFile(process.env.CAPTURE_PATH, prompt);
 console.log("stdout message");
 console.error("stderr message");
-process.exit(Number(process.env.FAKE_CODEX_EXIT ?? 0));
+if (process.env.FAKE_CODEX_HANG === "1") {
+  process.on("SIGTERM", () => console.error("ignored SIGTERM"));
+  setInterval(() => {}, 1000);
+} else {
+  process.exit(Number(process.env.FAKE_CODEX_EXIT ?? 0));
+}
 `,
 );
 await chmod(executable, 0o755);
@@ -72,4 +77,26 @@ assert.equal(
     })
   ).exitCode,
   7,
+);
+
+const preAborted = new AbortController();
+preAborted.abort();
+await assert.rejects(
+  () => worker.run({ task, cwd: root, logPath, signal: preAborted.signal }),
+  /aborted before launch/i,
+);
+
+const hanging = new CodexCliWorker({
+  executable,
+  env: { ...process.env, CAPTURE_PATH: capturePath, FAKE_CODEX_HANG: "1" },
+  terminationGraceMs: 50,
+});
+const controller = new AbortController();
+const hangingRun = hanging.run({ task, cwd: root, logPath, signal: controller.signal });
+setTimeout(() => controller.abort(), 300);
+assert.equal((await hangingRun).signal, "SIGKILL");
+
+await assert.rejects(
+  () => new CodexCliWorker({ executable, platform: "win32" }).version(),
+  /Windows.*WSL/i,
 );

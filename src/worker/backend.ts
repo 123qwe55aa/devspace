@@ -29,13 +29,23 @@ export interface WorkerBackend {
 export class CodexCliWorker implements WorkerBackend {
   private readonly executable: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly platform: NodeJS.Platform;
+  private readonly terminationGraceMs: number;
 
-  constructor(options: { executable?: string; env?: NodeJS.ProcessEnv } = {}) {
+  constructor(options: {
+    executable?: string;
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    terminationGraceMs?: number;
+  } = {}) {
     this.env = options.env ?? process.env;
     this.executable = options.executable ?? this.env.DEVSPACE_CODEX_BIN ?? "codex";
+    this.platform = options.platform ?? process.platform;
+    this.terminationGraceMs = options.terminationGraceMs ?? 5_000;
   }
 
   async version(): Promise<string> {
+    this.assertSupportedPlatform();
     try {
       return (await execFileAsync(this.executable, ["--version"], { env: this.env })).stdout.trim();
     } catch (error) {
@@ -45,6 +55,10 @@ export class CodexCliWorker implements WorkerBackend {
   }
 
   async run(input: WorkerRunInput): Promise<WorkerResult> {
+    this.assertSupportedPlatform();
+    if (input.signal.aborted) {
+      throw new Error("Worker execution was aborted before launch");
+    }
     await mkdir(dirname(input.logPath), { recursive: true });
     const args = [
       "exec",
@@ -58,6 +72,9 @@ export class CodexCliWorker implements WorkerBackend {
       "-",
     ];
     const executableVersion = await this.version();
+    if (input.signal.aborted) {
+      throw new Error("Worker execution was aborted before launch");
+    }
     const log = createWriteStream(input.logPath, { flags: "w" });
 
     return new Promise<WorkerResult>((resolve, reject) => {
@@ -68,8 +85,14 @@ export class CodexCliWorker implements WorkerBackend {
         stdio: ["pipe", "pipe", "pipe"],
       });
       let settled = false;
-      const abort = () => child.kill("SIGTERM");
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const abort = () => {
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), this.terminationGraceMs);
+        killTimer.unref();
+      };
       input.signal.addEventListener("abort", abort, { once: true });
+      if (input.signal.aborted) abort();
       child.stdout.pipe(log, { end: false });
       child.stderr.pipe(log, { end: false });
       child.stdin.end(input.task.prompt);
@@ -77,17 +100,27 @@ export class CodexCliWorker implements WorkerBackend {
       child.once("error", (error) => {
         if (settled) return;
         settled = true;
+        if (killTimer) clearTimeout(killTimer);
         input.signal.removeEventListener("abort", abort);
         log.end(() => reject(error));
       });
       child.once("close", (exitCode, signal) => {
         if (settled) return;
         settled = true;
+        if (killTimer) clearTimeout(killTimer);
         input.signal.removeEventListener("abort", abort);
         log.end(() => {
           resolve({ exitCode, signal, executableVersion, args: [...args] });
         });
       });
     });
+  }
+
+  private assertSupportedPlatform(): void {
+    if (this.platform === "win32") {
+      throw new Error(
+        "The Codex Worker pipeline does not support native Windows launchers. Use DevSpace from WSL.",
+      );
+    }
   }
 }

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { loadConfig } from "../config.js";
+import { validateManagedWorktree } from "../git-worktrees.js";
 import type { WorkerBackend, WorkerResult, WorkerRunInput } from "./backend.js";
 import { WorkerOrchestrator } from "./orchestrator.js";
 import { createRunStore } from "./run-store.js";
@@ -76,10 +77,11 @@ await writeFile(
   }),
 );
 
+const worktreeRoot = join(root, "worktrees");
 const config = loadConfig({
   DEVSPACE_CONFIG_DIR: join(root, "config"),
   DEVSPACE_ALLOWED_ROOTS: root,
-  DEVSPACE_WORKTREE_ROOT: join(root, "worktrees"),
+  DEVSPACE_WORKTREE_ROOT: worktreeRoot,
   DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
   PORT: "1",
 });
@@ -93,6 +95,55 @@ assert.deepEqual(worker.calls, ["T1", "T2"]);
 assert.equal(failed.tasks[0]?.state, "completed");
 assert.equal(failed.tasks[1]?.attempts, 1);
 assert.ok(failed.worktreePath);
+assert.equal(
+  await validateManagedWorktree({
+    worktreePath: failed.worktreePath!,
+    sourceRoot: project,
+    baseSha: failed.baseSha,
+    config,
+  }),
+  await realpath(failed.worktreePath!),
+);
+await assert.rejects(
+  () => validateManagedWorktree({
+    worktreePath: project,
+    sourceRoot: project,
+    baseSha: failed.baseSha,
+    config,
+  }),
+  /outside the managed worktree root/i,
+);
+const replacedPath = join(worktreeRoot, "replaced");
+await symlink(project, replacedPath, "dir");
+await assert.rejects(
+  () => validateManagedWorktree({
+    worktreePath: replacedPath,
+    sourceRoot: project,
+    baseSha: failed.baseSha,
+    config,
+  }),
+  /outside the managed worktree root/i,
+);
+const unregisteredPath = join(worktreeRoot, "unregistered");
+await mkdir(unregisteredPath);
+await assert.rejects(
+  () => validateManagedWorktree({
+    worktreePath: unregisteredPath,
+    sourceRoot: project,
+    baseSha: failed.baseSha,
+    config,
+  }),
+  /not registered/i,
+);
+await assert.rejects(
+  () => validateManagedWorktree({
+    worktreePath: failed.worktreePath!,
+    sourceRoot: project,
+    baseSha: "0000000000000000000000000000000000000000",
+    config,
+  }),
+  /identity does not match/i,
+);
 await access(join(failed.worktreePath!, "T1.txt"));
 await access(join(failed.worktreePath!, "T2.txt"));
 await assert.rejects(() => access(join(project, "T1.txt")));

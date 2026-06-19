@@ -109,6 +109,8 @@ ChatGPT can hand a structured task to the local Codex CLI without changing the n
 
 DevSpace creates a detached managed worktree and never commits or pushes Worker changes. A resumed run continues the same mutable worktree; it is recovery, not deterministic replay. The event journal reconstructs lifecycle state, while prompts, logs, fingerprints, and diffs are execution evidence rather than reproducible results.
 
+The Worker pipeline supports Linux, macOS, and Windows through WSL. Native Windows npm `.cmd` launchers are not executed because doing so would require a shell boundary; the normal DevSpace MCP server retains the platform support listed below.
+
 ## Mental Model
 
 DevSpace is remote access to selected local folders.

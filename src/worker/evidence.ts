@@ -28,15 +28,7 @@ export async function captureWorktreeEvidence(
   const untracked: Array<{ path: string; sha256: string }> = [];
 
   for (const path of paths) {
-    const absolutePath = join(root, path);
-    const stats = await lstat(absolutePath);
-    const content = stats.isSymbolicLink()
-      ? Buffer.from(await readlink(absolutePath))
-      : await readFile(absolutePath);
-    untracked.push({
-      path,
-      sha256: createHash("sha256").update(content).digest("hex"),
-    });
+    untracked.push({ path, sha256: await hashUntrackedPath(root, path) });
   }
 
   const digest = createHash("sha256");
@@ -60,4 +52,18 @@ export async function captureWorktreeEvidence(
     untracked,
     ignoredFilesExcluded: true,
   };
+}
+
+export async function hashUntrackedPath(root: string, path: string): Promise<string> {
+  const absolutePath = join(root, path);
+  const stats = await lstat(absolutePath);
+  let content: Buffer;
+  if (stats.isSymbolicLink()) {
+    content = Buffer.from(await readlink(absolutePath));
+  } else if (stats.isFile()) {
+    content = await readFile(absolutePath);
+  } else {
+    throw new Error(`Unsupported untracked file type: ${path}`);
+  }
+  return createHash("sha256").update(content).digest("hex");
 }

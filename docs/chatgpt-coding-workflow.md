@@ -193,3 +193,5 @@ devspace runs
 New runs start from the source checkout's committed `HEAD`. The uncommitted Spec is loaded before worktree creation, but other uncommitted source changes are not copied. DevSpace reports when the source checkout is dirty.
 
 The Worker pipeline is traceable, not replayable. `events.jsonl` reconstructs lifecycle state only. Exact prompts, logs, Codex version, worktree hashes, and diffs help explain attempts but cannot reproduce the same model output or patch.
+
+Run the Worker pipeline on Linux, macOS, or Windows through WSL. Native Windows npm `.cmd` launchers are intentionally not invoked through a shell.

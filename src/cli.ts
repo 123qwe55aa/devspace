@@ -45,12 +45,29 @@ async function main(argv: string[]): Promise<void> {
       await ensureConfigured();
       const { executeWorkerCommand, parseWorkerCommand } = await import("./worker/commands.js");
       const files = loadDevspaceFiles();
-      await executeWorkerCommand({
-        command: parseWorkerCommand(command, args),
-        cwd: process.cwd(),
-        config: loadConfig(),
-        runsRoot: resolve(files.dir, "runs"),
-      });
+      const controller = new AbortController();
+      const interrupt = () => {
+        process.exitCode = 130;
+        controller.abort();
+      };
+      const terminate = () => {
+        process.exitCode = 143;
+        controller.abort();
+      };
+      process.once("SIGINT", interrupt);
+      process.once("SIGTERM", terminate);
+      try {
+        await executeWorkerCommand({
+          command: parseWorkerCommand(command, args),
+          cwd: process.cwd(),
+          config: loadConfig(),
+          runsRoot: resolve(files.dir, "runs"),
+          signal: controller.signal,
+        });
+      } finally {
+        process.removeListener("SIGINT", interrupt);
+        process.removeListener("SIGTERM", terminate);
+      }
       return;
     }
     case "help":

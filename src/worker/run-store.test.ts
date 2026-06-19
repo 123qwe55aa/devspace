@@ -76,6 +76,38 @@ await lock.release();
 const reacquired = await store.acquireLock(second.id);
 await reacquired.release();
 
+const concurrent = await Promise.allSettled([
+  store.acquireLock(second.id),
+  store.acquireLock(second.id),
+]);
+assert.equal(concurrent.filter((result) => result.status === "fulfilled").length, 1);
+assert.equal(concurrent.filter((result) => result.status === "rejected").length, 1);
+for (const result of concurrent) {
+  if (result.status === "fulfilled") await result.value.release();
+}
+
+const invalidFinal = await store.createRun({
+  sourceProject: "/tmp/project",
+  baseSha: "invalid-final",
+  specPath: "/tmp/project/.devspace/spec/current.json",
+  spec,
+  compilerVersion: 1,
+  promptVersion: "worker-prompt-v1",
+});
+await appendFile(join(root, invalidFinal.id, "events.jsonl"), '{"version":2}');
+await assert.rejects(() => store.rebuildProjection(invalidFinal.id), /corrupt event/i);
+
+const invalidSyntax = await store.createRun({
+  sourceProject: "/tmp/project",
+  baseSha: "invalid-syntax",
+  specPath: "/tmp/project/.devspace/spec/current.json",
+  spec,
+  compilerVersion: 1,
+  promptVersion: "worker-prompt-v1",
+});
+await appendFile(join(root, invalidSyntax.id, "events.jsonl"), '{"version":]');
+await assert.rejects(() => store.rebuildProjection(invalidSyntax.id), /corrupt event/i);
+
 await assert.rejects(
   () => store.writeArtifact(second.id, "../outside", "no"),
   /inside the run directory/i,

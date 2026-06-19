@@ -109,6 +109,51 @@ export async function inspectWorktreeSource(input: {
   return { sourceRoot, baseSha, dirtySource };
 }
 
+export async function validateManagedWorktree(input: {
+  worktreePath: string;
+  sourceRoot: string;
+  baseSha: string;
+  config: ServerConfig;
+}): Promise<string> {
+  assertAllowedPath(input.sourceRoot, input.config.allowedRoots);
+  const [canonicalRoot, canonicalPath, canonicalSource] = await Promise.all([
+    realpath(input.config.worktreeRoot),
+    realpath(input.worktreePath),
+    realpath(input.sourceRoot),
+  ]);
+  if (canonicalPath === canonicalRoot || !isPathInsideRoot(canonicalPath, canonicalRoot)) {
+    throw new GitWorktreeError(
+      "GIT_WORKTREE_CREATE_FAILED",
+      `Managed worktree path is outside the managed worktree root: ${input.worktreePath}`,
+    );
+  }
+
+  const worktreeList = await git(["worktree", "list", "--porcelain"], canonicalSource);
+  const registeredPaths = worktreeList
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => line.slice("worktree ".length));
+  const registeredCanonicalPaths = await Promise.all(
+    registeredPaths.map((path) => realpath(path).catch(() => undefined)),
+  );
+  if (!registeredCanonicalPaths.includes(canonicalPath)) {
+    throw new GitWorktreeError(
+      "GIT_WORKTREE_CREATE_FAILED",
+      `Managed worktree is not registered with its source repository: ${input.worktreePath}`,
+    );
+  }
+
+  const topLevel = await realpath((await git(["rev-parse", "--show-toplevel"], canonicalPath)).trim());
+  const head = (await git(["rev-parse", "HEAD"], canonicalPath)).trim();
+  if (topLevel !== canonicalPath || head !== input.baseSha) {
+    throw new GitWorktreeError(
+      "GIT_WORKTREE_CREATE_FAILED",
+      `Managed worktree identity does not match run base ${input.baseSha}: ${input.worktreePath}`,
+    );
+  }
+  return canonicalPath;
+}
+
 async function resolveGitRoot(path: string, allowedRoots: string[]): Promise<string> {
   try {
     const output = await git(["rev-parse", "--show-toplevel"], path);

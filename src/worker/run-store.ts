@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import {
   appendFile,
   mkdir,
-  open,
   readFile,
   readdir,
   rename,
@@ -136,26 +135,42 @@ class FileRunStore implements RunStore {
 
   async acquireLock(runId: string): Promise<RunLock> {
     const path = join(this.runDirectory(runId), "run.lock");
+    const ownerPath = join(path, "owner.json");
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const handle = await open(path, "wx");
-        await handle.writeFile(`${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`);
+        await mkdir(path);
+        const token = randomBytes(16).toString("hex");
+        try {
+          await writeFile(
+            ownerPath,
+            `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString() })}\n`,
+          );
+        } catch (error) {
+          await rm(path, { recursive: true, force: true });
+          throw error;
+        }
         let released = false;
         return {
           release: async () => {
             if (released) return;
             released = true;
-            await handle.close();
-            await rm(path, { force: true });
+            const owner = await readLockOwner(ownerPath);
+            if (owner?.token === token) {
+              await rm(path, { recursive: true, force: true });
+            }
           },
         };
       } catch (error) {
         if (!isCode(error, "EEXIST")) throw error;
-        const owner = await readLockOwner(path);
-        if (owner !== undefined && isProcessAlive(owner)) {
-          throw new Error(`Run ${runId} is already running in process ${owner}`);
+        const owner = await readLockOwner(ownerPath);
+        if (owner === undefined || isProcessAlive(owner.pid)) {
+          throw new Error(
+            owner
+              ? `Run ${runId} is already running in process ${owner.pid}`
+              : `Run ${runId} is already running`,
+          );
         }
-        await rm(path, { force: true });
+        await rm(path, { recursive: true, force: true });
       }
     }
     throw new Error(`Run ${runId} is already running`);
@@ -203,11 +218,21 @@ class FileRunStore implements RunStore {
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]!;
       if (!line.trim()) continue;
+      let parsed: unknown;
       try {
-        events.push(runEventSchema.parse(JSON.parse(line)));
+        parsed = JSON.parse(line);
       } catch (error) {
-        const isIncompleteFinalLine = !endsWithNewline && index === lines.length - 1;
+        const isIncompleteFinalLine =
+          !endsWithNewline &&
+          index === lines.length - 1 &&
+          isTruncatedJsonError(error, line);
         if (isIncompleteFinalLine) break;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Corrupt event at line ${index + 1}: ${message}`);
+      }
+      try {
+        events.push(runEventSchema.parse(parsed));
+      } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Corrupt event at line ${index + 1}: ${message}`);
       }
@@ -222,12 +247,24 @@ class FileRunStore implements RunStore {
 
     const lastNewline = content.lastIndexOf("\n");
     const tail = content.slice(lastNewline + 1);
+    let parsed: unknown;
     try {
-      runEventSchema.parse(JSON.parse(tail));
-      await appendFile(path, "\n");
-    } catch {
-      await truncate(path, lastNewline + 1);
+      parsed = JSON.parse(tail);
+    } catch (error) {
+      if (isTruncatedJsonError(error, tail)) {
+        await truncate(path, lastNewline + 1);
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Corrupt event at final line: ${message}`);
     }
+    try {
+      runEventSchema.parse(parsed);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Corrupt event at final line: ${message}`);
+    }
+    await appendFile(path, "\n");
   }
 
   private async writeProjection(runId: string, projection: RunProjection): Promise<void> {
@@ -243,10 +280,17 @@ function createRunId(): string {
   return `run_${timestamp}_${randomBytes(4).toString("hex")}`;
 }
 
-async function readLockOwner(path: string): Promise<number | undefined> {
+async function readLockOwner(
+  path: string,
+): Promise<{ pid: number; token: string } | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(path, "utf8")) as { pid?: unknown };
-    return typeof parsed.pid === "number" ? parsed.pid : undefined;
+    const parsed = JSON.parse(await readFile(path, "utf8")) as {
+      pid?: unknown;
+      token?: unknown;
+    };
+    return typeof parsed.pid === "number" && typeof parsed.token === "string"
+      ? { pid: parsed.pid, token: parsed.token }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -268,4 +312,11 @@ function isCode(error: unknown, code: string): boolean {
       "code" in error &&
       (error as { code?: unknown }).code === code,
   );
+}
+
+function isTruncatedJsonError(error: unknown, input: string): boolean {
+  if (!(error instanceof SyntaxError)) return false;
+  if (/unexpected end|unterminated/i.test(error.message)) return true;
+  const position = /position (\d+)/i.exec(error.message)?.[1];
+  return position !== undefined && Number(position) >= input.length;
 }

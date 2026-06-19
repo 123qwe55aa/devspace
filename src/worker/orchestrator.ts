@@ -1,6 +1,9 @@
-import { stat } from "node:fs/promises";
 import type { ServerConfig } from "../config.js";
-import { createManagedWorktree, inspectWorktreeSource } from "../git-worktrees.js";
+import {
+  createManagedWorktree,
+  inspectWorktreeSource,
+  validateManagedWorktree,
+} from "../git-worktrees.js";
 import type { WorkerBackend, WorkerResult } from "./backend.js";
 import { COMPILER_VERSION, PROMPT_VERSION, compileTask } from "./compiler.js";
 import { captureWorktreeEvidence } from "./evidence.js";
@@ -66,16 +69,18 @@ export class WorkerOrchestrator {
     const existing = await this.dependencies.store.load(runId);
     if (existing.state === "completed") return existing;
     if (!existing.worktreePath) throw new Error(`Run ${runId} has no managed worktree to resume`);
-    const worktreeStats = await stat(existing.worktreePath).catch(() => undefined);
-    if (!worktreeStats?.isDirectory()) {
-      throw new Error(`Managed worktree is missing for run ${runId}: ${existing.worktreePath}`);
-    }
+    const worktreePath = await validateManagedWorktree({
+      worktreePath: existing.worktreePath,
+      sourceRoot: existing.sourceProject,
+      baseSha: existing.baseSha,
+      config: this.dependencies.config,
+    });
     await this.dependencies.backend.version();
     const spec = await this.dependencies.store.readSpec(runId);
     const lock = await this.dependencies.store.acquireLock(runId);
     try {
       await this.dependencies.store.append(runId, { type: "run_started" });
-      return await this.executeTasks(runId, spec, existing.worktreePath, signal);
+      return await this.executeTasks(runId, spec, worktreePath, signal);
     } catch (error) {
       return await this.failRun(runId, error);
     } finally {
