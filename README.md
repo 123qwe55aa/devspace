@@ -105,9 +105,11 @@ ChatGPT can hand a structured task to the local Codex CLI without changing the n
 1. Ask ChatGPT to inspect the project and write `.devspace/spec/current.json`.
 2. Review the JSON task contract.
 3. Run `devspace run` from the project checkout.
-4. Inspect the isolated result with `devspace status` or list runs with `devspace runs`.
+4. Follow raw Codex output with `devspace logs`, inspect state with `devspace status`, or list runs with `devspace runs`.
 
 DevSpace creates a detached managed worktree and never commits or pushes Worker changes. A resumed run continues the same mutable worktree; it is recovery, not deterministic replay. The event journal reconstructs lifecycle state, while prompts, logs, fingerprints, and diffs are execution evidence rather than reproducible results.
+
+`devspace logs` follows the latest run; `devspace logs <run-id>` follows a selected run. It prints existing output, switches to later task attempts automatically, and exits when the run completes or fails. Pressing `Ctrl+C` stops only the viewer and does not cancel the Worker.
 
 The Worker pipeline supports Linux, macOS, and Windows through WSL. Native Windows npm `.cmd` launchers are not executed because doing so would require a shell boundary; the normal DevSpace MCP server retains the platform support listed below.
 

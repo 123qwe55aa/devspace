@@ -184,11 +184,14 @@ Review the Spec before running it. From the project checkout:
 
 ```bash
 devspace run
+devspace logs
 devspace status
 devspace runs
 ```
 
 `devspace run <run-id>` explicitly resumes an incomplete run in its existing mutable worktree. Completed tasks are skipped and the next task attempt is recorded separately.
+
+`devspace logs` follows raw Codex output for the latest run, while `devspace logs <run-id>` selects a specific run. It emits existing content, follows appended bytes, switches task attempts automatically, and exits at terminal state. `Ctrl+C` stops viewing without cancelling the Worker.
 
 New runs start from the source checkout's committed `HEAD`. The uncommitted Spec is loaded before worktree creation, but other uncommitted source changes are not copied. DevSpace reports when the source checkout is dirty.
 
