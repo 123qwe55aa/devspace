@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { formatRunList, formatRunStatus, parseWorkerCommand } from "./commands.js";
+import {
+  formatRunList,
+  formatRunStatus,
+  parseWorkerCommand,
+  resolveLogsRun,
+} from "./commands.js";
 import type { RunProjection } from "./events.js";
 
 assert.deepEqual(parseWorkerCommand("run", []), { kind: "run-new" });
@@ -13,8 +18,14 @@ assert.deepEqual(parseWorkerCommand("status", ["run_123"]), {
   runId: "run_123",
 });
 assert.deepEqual(parseWorkerCommand("runs", []), { kind: "runs" });
+assert.deepEqual(parseWorkerCommand("logs", []), { kind: "logs-latest" });
+assert.deepEqual(parseWorkerCommand("logs", ["run_123"]), {
+  kind: "logs",
+  runId: "run_123",
+});
 assert.throws(() => parseWorkerCommand("runs", ["extra"]), /does not accept arguments/);
 assert.throws(() => parseWorkerCommand("run", ["one", "two"]), /at most one run id/);
+assert.throws(() => parseWorkerCommand("logs", ["one", "two"]), /at most one run id/);
 
 const completed: RunProjection = {
   id: "run_123",
@@ -36,3 +47,10 @@ assert.match(formatRunStatus(completed), /T1.*completed.*attempts: 1/);
 assert.match(formatRunStatus(completed), /dirty source: yes/);
 assert.match(formatRunList([completed]), /run_123.*completed.*\/tmp\/project/);
 assert.equal(formatRunList([]), "No worker runs found.");
+assert.equal(await resolveLogsRun({ observeLatest: async () => undefined }), undefined);
+assert.equal(
+  await resolveLogsRun({
+    observeLatest: async () => ({ run: completed, logs: [] }),
+  }),
+  "run_123",
+);

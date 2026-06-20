@@ -1,18 +1,21 @@
 import type { ServerConfig } from "../config.js";
 import { CodexCliWorker } from "./backend.js";
 import type { RunProjection } from "./events.js";
+import { followRunLogs } from "./log-follower.js";
 import { WorkerOrchestrator } from "./orchestrator.js";
-import { createRunStore } from "./run-store.js";
+import { createRunStore, type RunStore } from "./run-store.js";
 
 export type WorkerCliCommand =
   | { kind: "run-new" }
   | { kind: "run-resume"; runId: string }
   | { kind: "status-latest" }
   | { kind: "status"; runId: string }
-  | { kind: "runs" };
+  | { kind: "runs" }
+  | { kind: "logs-latest" }
+  | { kind: "logs"; runId: string };
 
 export function parseWorkerCommand(
-  command: "run" | "status" | "runs",
+  command: "run" | "status" | "runs" | "logs",
   args: string[],
 ): WorkerCliCommand {
   if (command === "runs") {
@@ -23,7 +26,16 @@ export function parseWorkerCommand(
   if (command === "run") {
     return args[0] ? { kind: "run-resume", runId: args[0] } : { kind: "run-new" };
   }
+  if (command === "logs") {
+    return args[0] ? { kind: "logs", runId: args[0] } : { kind: "logs-latest" };
+  }
   return args[0] ? { kind: "status", runId: args[0] } : { kind: "status-latest" };
+}
+
+export async function resolveLogsRun(
+  store: Pick<RunStore, "observeLatest">,
+): Promise<string | undefined> {
+  return (await store.observeLatest())?.run.id;
 }
 
 export function formatRunStatus(run: RunProjection): string {
@@ -58,21 +70,21 @@ export async function executeWorkerCommand(input: {
 }): Promise<void> {
   const output = input.output ?? process.stdout;
   const store = createRunStore(input.runsRoot);
-  const orchestrator = new WorkerOrchestrator({
-    config: input.config,
-    store,
-    backend: new CodexCliWorker(),
-    onWarning: (warning) => output.write(`warning: ${warning}\n`),
-  });
+  const orchestrator = () => new WorkerOrchestrator({
+      config: input.config,
+      store,
+      backend: new CodexCliWorker(),
+      onWarning: (warning) => output.write(`warning: ${warning}\n`),
+    });
 
   switch (input.command.kind) {
     case "run-new": {
-      const run = await orchestrator.startNewRun(input.cwd, input.signal);
+      const run = await orchestrator().startNewRun(input.cwd, input.signal);
       output.write(`${formatRunStatus(run)}\n`);
       return;
     }
     case "run-resume": {
-      const run = await orchestrator.resumeRun(input.command.runId, input.signal);
+      const run = await orchestrator().resumeRun(input.command.runId, input.signal);
       output.write(`${formatRunStatus(run)}\n`);
       return;
     }
@@ -87,5 +99,22 @@ export async function executeWorkerCommand(input: {
     }
     case "runs":
       output.write(`${formatRunList(await store.list())}\n`);
+      return;
+    case "logs-latest": {
+      const runId = await resolveLogsRun(store);
+      if (!runId) {
+        output.write("No worker runs found.\n");
+        return;
+      }
+      await followRunLogs({ store, runId, output, signal: input.signal });
+      return;
+    }
+    case "logs":
+      await followRunLogs({
+        store,
+        runId: input.command.runId,
+        output,
+        signal: input.signal,
+      });
   }
 }
