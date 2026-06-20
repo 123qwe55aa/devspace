@@ -70,7 +70,8 @@ export async function executeWorkerCommand(input: {
 }): Promise<void> {
   const output = input.output ?? process.stdout;
   const store = createRunStore(input.runsRoot);
-  const orchestrator = () => new WorkerOrchestrator({
+  const orchestrator = () =>
+    new WorkerOrchestrator({
       config: input.config,
       store,
       backend: new CodexCliWorker(),
