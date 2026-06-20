@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
   appendFile,
+  lstat,
   mkdir,
   readFile,
   readdir,
@@ -141,15 +142,16 @@ class FileRunStore implements RunStore {
 
   async observe(runId: string): Promise<RunObservation> {
     const events = await this.readEvents(runId);
+    const logEvents = events.filter((event) => event.type === "task_attempt_started");
     return {
       run: reduceRunEvents(events),
-      logs: events
-        .filter((event) => event.type === "task_attempt_started")
-        .map((event) => ({
+      logs: await Promise.all(
+        logEvents.map(async (event) => ({
           taskId: event.taskId,
           attempt: event.attempt,
-          path: this.resolveArtifactPath(runId, event.logPath),
+          path: await this.resolveReadableArtifactPath(runId, event.logPath),
         })),
+      ),
     };
   }
 
@@ -243,6 +245,18 @@ class FileRunStore implements RunStore {
       relationship.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
     ) {
       throw new Error(`Artifact path must stay inside the run directory: ${relativePath}`);
+    }
+    return path;
+  }
+
+  private async resolveReadableArtifactPath(runId: string, relativePath: string): Promise<string> {
+    const path = this.resolveArtifactPath(runId, relativePath);
+    const metadata = await lstat(path).catch((error) => {
+      if (isCode(error, "ENOENT")) return undefined;
+      throw error;
+    });
+    if (metadata && !metadata.isFile()) {
+      throw new Error(`Log artifact must be a regular file: ${relativePath}`);
     }
     return path;
   }

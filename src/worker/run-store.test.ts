@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { TaskSpec } from "./spec.js";
@@ -151,3 +151,26 @@ await store.append(escaped.id, {
   logPath: "../outside.log",
 });
 await assert.rejects(() => store.observe(escaped.id), /inside the run directory/i);
+
+const linked = await store.createRun({
+  sourceProject: "/tmp/project",
+  baseSha: "linked",
+  specPath: "/tmp/project/.devspace/spec/current.json",
+  spec,
+  compilerVersion: 1,
+  promptVersion: "worker-prompt-v1",
+});
+await store.append(linked.id, { type: "run_started" });
+const outsideLog = join(root, "outside.log");
+await writeFile(outsideLog, "sensitive\n");
+await mkdir(join(root, linked.id, "tasks", "T1"), { recursive: true });
+await symlink(outsideLog, join(root, linked.id, "tasks", "T1", "attempt-1.log"));
+await store.append(linked.id, {
+  type: "task_attempt_started",
+  taskId: "T1",
+  attempt: 1,
+  promptHash: "hash",
+  promptPath: "tasks/T1/attempt-1.prompt.md",
+  logPath: "tasks/T1/attempt-1.log",
+});
+await assert.rejects(() => store.observe(linked.id), /regular file/i);
