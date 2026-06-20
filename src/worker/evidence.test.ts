@@ -12,14 +12,19 @@ await git(["init"]);
 await git(["config", "user.email", "devspace@example.com"]);
 await git(["config", "user.name", "DevSpace Test"]);
 await writeFile(join(repo, "tracked.txt"), "before\n");
+await writeFile(join(repo, "tracked.bin"), Buffer.from([0, 1, 2, 3]));
 await git(["add", "."]);
 await git(["commit", "-m", "initial"]);
 const baseSha = (await git(["rev-parse", "HEAD"])).trim();
 
 await writeFile(join(repo, "tracked.txt"), "after\n");
+await writeFile(join(repo, "tracked.bin"), Buffer.from([0, 4, 5, 6]));
 await writeFile(join(repo, "new.txt"), "new\n");
 const evidence = await captureWorktreeEvidence(repo, baseSha);
 assert.match(evidence.trackedDiff, /tracked\.txt/);
+assert.match(evidence.trackedDiff, /tracked\.bin/);
+assert.match(evidence.trackedDiff, /Binary files/);
+assert.doesNotMatch(evidence.trackedDiff, /GIT binary patch/);
 assert.deepEqual(
   evidence.untracked.map((item) => item.path),
   ["new.txt"],

@@ -17,7 +17,9 @@ export async function captureWorktreeEvidence(
   baseSha: string,
 ): Promise<WorktreeEvidence> {
   const trackedDiff = (
-    await git(root, ["diff", "--binary", "HEAD"], { maxBuffer: 100 * 1024 * 1024 })
+    await git(root, ["diff", "--no-ext-diff", "--no-textconv", "HEAD"], {
+      maxBuffer: 100 * 1024 * 1024,
+    })
   ).stdout;
   const untrackedOutput = (
     await git(root, ["ls-files", "--others", "--exclude-standard", "-z"], {
