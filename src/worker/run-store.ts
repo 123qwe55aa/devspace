@@ -32,6 +32,17 @@ export interface RunLock {
   release(): Promise<void>;
 }
 
+export interface RunAttemptLog {
+  taskId: string;
+  attempt: number;
+  path: string;
+}
+
+export interface RunObservation {
+  run: RunProjection;
+  logs: RunAttemptLog[];
+}
+
 export interface RunStore {
   readonly root: string;
   createRun(input: CreateRunInput): Promise<RunProjection>;
@@ -40,6 +51,8 @@ export interface RunStore {
   rebuildProjection(runId: string): Promise<RunProjection>;
   list(): Promise<RunProjection[]>;
   latest(): Promise<RunProjection | undefined>;
+  observe(runId: string): Promise<RunObservation>;
+  observeLatest(): Promise<RunObservation | undefined>;
   nextAttempt(runId: string, taskId: string): Promise<number>;
   acquireLock(runId: string): Promise<RunLock>;
   writeArtifact(
@@ -126,6 +139,29 @@ class FileRunStore implements RunStore {
     return (await this.list())[0];
   }
 
+  async observe(runId: string): Promise<RunObservation> {
+    const events = await this.readEvents(runId);
+    return {
+      run: reduceRunEvents(events),
+      logs: events
+        .filter((event) => event.type === "task_attempt_started")
+        .map((event) => ({
+          taskId: event.taskId,
+          attempt: event.attempt,
+          path: this.resolveArtifactPath(runId, event.logPath),
+        })),
+    };
+  }
+
+  async observeLatest(): Promise<RunObservation | undefined> {
+    const entries = await readdir(this.root, { withFileTypes: true }).catch(() => []);
+    const runId = entries
+      .filter((entry) => entry.isDirectory() && /^run_[A-Za-z0-9_-]+$/.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((left, right) => right.localeCompare(left))[0];
+    return runId ? this.observe(runId) : undefined;
+  }
+
   async nextAttempt(runId: string, taskId: string): Promise<number> {
     const run = await this.load(runId);
     const task = run.tasks.find((candidate) => candidate.id === taskId);
@@ -181,16 +217,7 @@ class FileRunStore implements RunStore {
     relativePath: string,
     content: string | Uint8Array,
   ): Promise<string> {
-    const runDirectory = this.runDirectory(runId);
-    const path = resolve(runDirectory, relativePath);
-    const relationship = relative(runDirectory, path);
-    if (
-      isAbsolute(relativePath) ||
-      relationship === ".." ||
-      relationship.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
-    ) {
-      throw new Error(`Artifact path must stay inside the run directory: ${relativePath}`);
-    }
+    const path = this.resolveArtifactPath(runId, relativePath);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, content);
     return path;
@@ -204,6 +231,20 @@ class FileRunStore implements RunStore {
   private runDirectory(runId: string): string {
     if (!/^run_[A-Za-z0-9_-]+$/.test(runId)) throw new Error(`Invalid run id: ${runId}`);
     return join(this.root, runId);
+  }
+
+  private resolveArtifactPath(runId: string, relativePath: string): string {
+    const runDirectory = this.runDirectory(runId);
+    const path = resolve(runDirectory, relativePath);
+    const relationship = relative(runDirectory, path);
+    if (
+      isAbsolute(relativePath) ||
+      relationship === ".." ||
+      relationship.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
+    ) {
+      throw new Error(`Artifact path must stay inside the run directory: ${relativePath}`);
+    }
+    return path;
   }
 
   private eventsPath(runId: string): string {

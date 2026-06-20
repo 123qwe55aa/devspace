@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { TaskSpec } from "./spec.js";
 import { createRunStore } from "./run-store.js";
 
@@ -48,6 +48,21 @@ await store.append(created.id, {
 });
 assert.equal((await store.load(created.id)).tasks[0]?.state, "running");
 assert.equal(await store.nextAttempt(created.id, "T1"), 2);
+
+const projectionPath = join(root, created.id, "run.json");
+await writeFile(projectionPath, "sentinel\n");
+const observed = await store.observe(created.id);
+assert.equal(observed.run.tasks[0]?.state, "running");
+assert.deepEqual(observed.logs, [
+  {
+    taskId: "T1",
+    attempt: 1,
+    path: resolve(root, created.id, "tasks/T1/attempt-1.log"),
+  },
+]);
+assert.equal(await readFile(projectionPath, "utf8"), "sentinel\n");
+assert.equal((await store.observeLatest())?.run.id, created.id);
+assert.equal(await readFile(projectionPath, "utf8"), "sentinel\n");
 
 await writeFile(join(root, created.id, "run.json"), "{}\n");
 assert.equal((await store.load(created.id)).tasks[0]?.state, "running");
@@ -117,3 +132,22 @@ assert.equal(await readFile(artifact, "utf8"), "hello");
 assert.equal((await store.list())[0]?.id, second.id);
 assert.equal((await store.latest())?.id, second.id);
 assert.deepEqual(await store.readSpec(second.id), spec);
+
+const escaped = await store.createRun({
+  sourceProject: "/tmp/project",
+  baseSha: "escape",
+  specPath: "/tmp/project/.devspace/spec/current.json",
+  spec,
+  compilerVersion: 1,
+  promptVersion: "worker-prompt-v1",
+});
+await store.append(escaped.id, { type: "run_started" });
+await store.append(escaped.id, {
+  type: "task_attempt_started",
+  taskId: "T1",
+  attempt: 1,
+  promptHash: "hash",
+  promptPath: "tasks/T1/attempt-1.prompt.md",
+  logPath: "../outside.log",
+});
+await assert.rejects(() => store.observe(escaped.id), /inside the run directory/i);
