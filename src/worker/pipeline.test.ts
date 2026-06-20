@@ -98,6 +98,14 @@ const status = await execFileAsync(
 );
 assert.match(status.stdout, new RegExp(`${runId}.*completed`));
 
+const logs = await execFileAsync(
+  process.execPath,
+  [tsxCli, cli, "logs", runId],
+  { cwd: project, env },
+);
+assert.match(logs.stdout, /==> T1 attempt 1 <==/);
+assert.match(logs.stdout, /fake worker complete/);
+
 for (const path of [
   "spec.json",
   "events.jsonl",

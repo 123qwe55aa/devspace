@@ -15,7 +15,16 @@ import {
 } from "./user-config.js";
 import { expandHomePath } from "./roots.js";
 
-type Command = "serve" | "init" | "doctor" | "config" | "run" | "status" | "runs" | "help";
+type Command =
+  | "serve"
+  | "init"
+  | "doctor"
+  | "config"
+  | "run"
+  | "status"
+  | "runs"
+  | "logs"
+  | "help";
 const require = createRequire(import.meta.url);
 const SUPPORTED_NODE_RANGE = ">=20.12 <27";
 
@@ -41,7 +50,8 @@ async function main(argv: string[]): Promise<void> {
       return;
     case "run":
     case "status":
-    case "runs": {
+    case "runs":
+    case "logs": {
       await ensureConfigured();
       const { executeWorkerCommand, parseWorkerCommand } = await import("./worker/commands.js");
       const files = loadDevspaceFiles();
@@ -84,7 +94,8 @@ function normalizeCommand(command: string | undefined): Command {
     command === "config" ||
     command === "run" ||
     command === "status" ||
-    command === "runs"
+    command === "runs" ||
+    command === "logs"
   ) return command;
   if (command === "help" || command === "--help" || command === "-h") return "help";
   throw new Error(`Unknown command: ${command}`);
@@ -303,6 +314,7 @@ function printHelp(): void {
       "  devspace run <run-id>     Resume an incomplete run in its existing worktree",
       "  devspace status [run-id]  Show one run; defaults to the latest",
       "  devspace runs             List recent runs",
+      "  devspace logs [run-id]    Follow raw Codex logs; defaults to the latest run",
       "",
       "For temporary tunnels:",
       "  DEVSPACE_PUBLIC_BASE_URL=https://example.trycloudflare.com devspace serve",
